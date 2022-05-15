@@ -7,16 +7,28 @@ import java.util.List;
 
 public class GenerateAst {
     public static void main(String[] args) throws IOException {
-        if (args.length != 1) {
-            System.out.println("Usage: generate_ast <output director>");
-            System.exit(64);
-        }
-        String outputDir = args[0];
+        // if (args.length != 1) {
+        //     System.out.println("Usage: generate_ast <output director>");
+        //     System.exit(64);
+        // }
+        String outputDir = "C:/Users/qures/Desktop/red/redlang";
         defineAst(outputDir, "Expr", Arrays.asList(
+            "Assign   : Token name, Expr value",
             "Binary   : Expr left, Token operator, Expr right",
             "Grouping : Expr expression",
             "Literal  : Object value",
-            "Unary    : Token operator, Expr right"
+            "Logical  : Expr left, Token operator, Expr right",
+            "Unary    : Token operator, Expr right",
+            "Variable : Token name"
+        ));
+
+        defineAst(outputDir, "Stmt", Arrays.asList(
+            "Block      : List<Stmt> statements",
+            "Expression : Expr expression",
+            "If         : Expr condition, Stmt thenBranch," + " Stmt elseBranch",
+            "Print      : Expr expression",
+            "Var        : Token name, Expr initializer",
+            "While      : Expr condition, Stmt body"
         ));
     }
 
@@ -29,7 +41,7 @@ public class GenerateAst {
         String path = outputDir + "/" + baseName + ".java";
         PrintWriter writer = new PrintWriter(path, "UTF-8");
         
-        writer.println("package red;");
+        writer.println("package redlang;");
         writer.println();
         writer.println("import java.util.List;");
         writer.println();
