@@ -5,7 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static red.TokenType.*;
+import static redlang.TokenType.*;
 
 class Scanner {
     private final String source;
