@@ -15,16 +15,17 @@ public class Red {
 
 
   public static void main(String[] args) throws IOException {
-    // runFile("C:/Users/qures/Desktop/red/main.txt");
+    // runFile("C:/Users/qures/Desktop/red/main.red");
+
     if (args.length > 1) {
-      System.out.println("Usage: jred [script]");
-      System.exit(64); // [64]
-    } 
-    
+      System.out.println("Usage jred [script]");
+      System.exit(64);
+    }
+
     else if (args.length == 1) {
-      runFile("C:/Users/qures/Desktop/red/main.txt");
-    } 
-    
+      runFile(args[0]);
+    }
+
     else {
       runPrompt();
     }
