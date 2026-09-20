@@ -46,18 +46,21 @@ code to rewrite in a language as small as Red.
 
 ## What Red is missing
 
-One thing.
+Nothing, as far as this plan can tell. Every item this file has carried
+is now closed.
 
-| Gap | State |
+| Was missing | State |
 |---|---|
 | Bitwise operators | **Done.** `&` `\|` `^` `~` `<<` `>>` on 32 bit integers. |
 | Turning a number into a byte | **Done.** `chr(n)`, `text.code_at(i)`, `text.bytes()`. |
 | Binary safe file output | **Done.** All 256 byte values round trip through a file. |
 | Named constants | **Done.** `enum`, with members that index arrays, key maps and print by name. |
-| Selective error handling | **Done.** Errors carry a kind, and a `try` can have several filtered `catch` clauses. |
+| Selective error handling | **Done.** Error kinds, several filtered `catch` clauses, and `finally`. |
 | Binding several names at once | **Done.** Array, map and instance patterns, nested, with rest. |
+| A set type | **Done.** `set()`, with union, intersection and difference. |
+| Column formatting | **Done.** `pad_left` and `pad_right`. |
 | Enough call depth | **Done.** 1024 frames, with a stack check before each call. |
-| A compiled file format | **Still missing.** Stage 1 below, and now the only thing in the way. |
+| A compiled file format | **Done.** `red compile` writes a versioned `.redc`, and running one skips the compiler. |
 
 ### The rehearsal
 
@@ -76,17 +79,10 @@ and it uses every part of the language the port depends on:
 - destructuring to unpack a rule and a compiler's result
 - error kinds to tell a bad input program from a bug in the compiler
 
-It runs. So the language is not what is in the way.
+It runs. So the language is not what is in the way, and now neither is
+the toolchain.
 
-### Not blocking, but worth having first
-
-- `finally`, for cleanup that has to happen on both paths.
-- String padding, so a disassembler can line its columns up without
-  building spaces by hand.
-- A set type. A map with ignored values works, and that is what the C++
-  compiler's own `constGlobals_` amounts to.
-
-### Speed is not a gap
+### Speed is not a gap either
 
 That was the early assumption, and measuring it showed the opposite.
 Interning is slow for many *distinct* strings, which is what the `string`
@@ -110,20 +106,21 @@ intern table instead of allocating.
 
 ### Stage 1: a compiled file format
 
-This is now the only thing blocking stage 3.
+**Finished.**
 
-Define `.redc`: a header with the format version, then the chunk tree.
-Add two things to the C++ side:
+`red compile app.red` writes `app.redc`, and running that file loads a
+chunk instead of compiling one. The file starts with `REDC` and a fixed
+width version, which is checked on load, so a file from another release
+is refused with a message rather than misread. The rest uses a variable
+length encoding, and a compiled file is smaller than its source for
+ordinary code. [bytecode.md](bytecode.md#compiled-files) has the layout.
 
-- `red compile file.red -o file.redc`
-- `red run file.redc`, which loads a chunk instead of compiling one
+Start-up on a four thousand function program went from 41ms to 4.4ms.
 
-This is useful on its own, because it makes start-up faster. It is
-required for every later stage, because it is the only way a compiler
-written in Red can hand its output to the virtual machine.
-
-**Done when** a `.redc` file produced from any test in `tests/` runs and
-gives the same output as the source did.
+The acceptance test was that a `.redc` built from any test in `tests/`
+runs and gives the same output as the source. The test runner does this
+for the whole suite with `--compiled`, and it is part of continuous
+integration.
 
 ### Stage 2: the missing language pieces
 
@@ -141,11 +138,12 @@ filtered `catch` clauses, so the compiler can separate a bad input
 program from a bug in itself; and destructuring, so a rule table entry
 or a multi-part result unpacks in one line.
 
-What is left of this stage is the acceptance test itself: a Red program
-that builds a `.redc` file byte by byte and has the virtual machine run
-it. That needs stage 1 first.
+A third round added `finally`, a set type and column padding, which were
+listed here as worth having before the port rather than blocking it.
+
 [`examples/mini_compiler.red`](../examples/mini_compiler.red) is the
-rehearsal for it.
+rehearsal: a Red program that builds bytecode byte by byte, writes it out
+and reads it back.
 
 ### Stage 3: the self-hosted compiler
 
@@ -193,18 +191,18 @@ runtime is not. Saying so plainly is better than claiming more.
 
 ## Order of work
 
-Stage 2 is finished. Stage 1 is small and useful on its own, and is now
-the only thing in the way. Stage 3 is the real milestone, and the one
-worth aiming at. Stage 4 should only start once stage 3 is finished and
-stable.
+Stages 1 and 2 are both finished. Stage 3 is next, and it is the real
+milestone. Stage 4 should only start once stage 3 is finished and stable.
 
 Stage 1 was deliberately left until after the language changes. Writing
 the serialiser first would have frozen the opcode list exactly when it
 was about to gain fifteen instructions across two rounds.
 
-That is also the thing to watch from here. The format is at version 3,
-having moved three times while the language was being filled in. Once the
-port starts, it should stop moving.
+That is now the thing to watch. The format is at version 3, having moved
+three times while the language was being filled in. From here it should
+stop moving. Every change to it makes the C++ compiler and the
+self-hosted one drift apart, and the whole point of stage 3 is that they
+agree byte for byte.
 
 The thing to protect along the way is the bytecode format. Every change to
 it makes the self-hosted compiler and the C++ compiler drift apart. Once

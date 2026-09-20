@@ -460,6 +460,34 @@ for (let [key, value] in ages.entries()) {
 Destructuring something that has no elements or no fields is an error
 naming the type, rather than a confusing failure further on.
 
+## Sets
+
+A set holds distinct values. Membership follows the same rules as map
+keys, so strings, numbers, booleans, `nil` and enum members can go in
+one.
+
+```red
+const seen = set();
+const digits = set([1, 2, 2, 3]);
+const letters = set("banana");     // a, b, n
+print(digits.len());               // 3
+```
+
+| Method | Result |
+|---|---|
+| `add(...)` | Adds values. Gives the set. |
+| `remove(value)` | `true` when it was there. |
+| `has(value)` | Is it in the set? |
+| `len()`, `len(s)` | How many values. |
+| `items()` | The values as an array, in no particular order. |
+| `clear()` | Empties it. |
+| `union(other)` `intersect(other)` `difference(other)` | A new set. Neither operand changes. |
+| `equals(other)` | Compares contents. |
+
+`set(source)` builds one from an array, another set or a string.
+`for ... in` walks the members. Sets print as `set(1, 2, 3)`, never in
+braces, so they cannot be mistaken for maps.
+
 ## Classes
 
 ```red
@@ -599,6 +627,33 @@ An error that no clause matches carries on outwards unchanged, with its
 message, kind and original trace. That is what lets a function handle the
 cases it knows about and leave the rest alone.
 
+### finally
+
+A `finally` block runs on every way out of a `try`, whether or not
+anything went wrong.
+
+```red
+const handle = open(path, "r");
+try {
+  return handle.read();
+} catch (e: "io") {
+  return nil;
+} finally {
+  handle.close();
+}
+```
+
+It runs after the body falls off the end, after a `catch` clause, after
+an error that no clause matched and before that error carries on, and
+after a `catch` clause that threw something of its own. It also runs
+before a `return`, `break` or `continue` leaves the block, and the exit
+then continues as written.
+
+Nested `try` blocks run their `finally` blocks innermost first.
+
+A `try` may have a `finally` with no `catch`, which is the shape for
+cleanup that does not handle anything.
+
 An error with no handler stops the program, prints the message and the
 call stack, and exits with code 70.
 
@@ -722,7 +777,7 @@ switchCase     -> "case" expression ( "," expression )* ":" declaration*
 returnStmt     -> "return" expression? ";"
 breakStmt      -> "break" ";"
 continueStmt   -> "continue" ";"
-tryStmt        -> "try" block catchClause+
+tryStmt        -> "try" block catchClause* ( "finally" block )?
 catchClause    -> "catch" "(" IDENT ( ":" expression )? ")" block
 throwStmt      -> "throw" expression ";"
 block          -> "{" declaration* "}"
@@ -761,8 +816,8 @@ arguments      -> expression ( "," expression )*
 ## Reserved words
 
 ```
-and    as     break  case   catch  class  const  continue
-default else  enum   false  for    fun    if     import
-in     let    nil    or     return spawn  super  this
-throw  true   try    switch while
+and    as       break  case   catch  class   const  continue
+default else    enum   false  finally for    fun    if
+import in      let     nil    or      return spawn  super
+this   throw   true    try    switch  while
 ```

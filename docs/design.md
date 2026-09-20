@@ -253,6 +253,53 @@ frame and a stack depth that no longer exist, so a later `throw` resumes
 inside dead code. The compiler counts the try blocks open at the start of
 each loop and emits one `TRY_END` per handler opened since.
 
+## finally
+
+A `finally` block has to run on every way out of a `try`: falling off the
+end, a caught error, an error that no clause matched, a `catch` clause
+that threw, and a `return`, `break` or `continue` leaving the block.
+
+Compilers usually handle this by emitting a copy of the finally block at
+each exit. A single pass compiler cannot, because the exits inside the
+body are compiled before the `finally` has been read.
+
+So Red compiles one copy and routes every exit through it. Two hidden
+slots carry the decision: an action slot saying why control is leaving,
+and a pending slot holding the error or the return value. Each exit sets
+both, unwinds to the depth the finally expects, and jumps to it. After
+the block runs, a dispatch acts on the action.
+
+The slots are allocated for every `try`, not only those with a
+`finally`, for the same single pass reason: when the body is compiled it
+is not yet known whether one follows. That costs two stack slots and two
+instructions per `try` statement.
+
+The dispatch runs after the try's own context has been popped, so a
+`return` in it routes through an enclosing `finally` if there is one.
+That is what makes nested blocks run innermost first without any extra
+machinery.
+
+## Compiling ahead of time
+
+Red compiles to bytecode and then interprets it. It has never had a just
+in time compiler, and the change here is not about that. What it did do
+was compile from source on every run.
+
+`red compile app.red` writes the bytecode to a file, and running that
+file skips the compiler. On a program of four thousand functions that is
+41ms of start-up down to 4.4ms, about nine times faster, and the compiled
+file is smaller than the source for ordinary code.
+
+Paying the compiler once also makes it worth doing work there. The
+compiler folds arithmetic, bitwise operations and string joins on
+literals into single constants. It is a peephole rather than a pass over
+a tree, which is what a single pass compiler can do cheaply. Anything
+deeper, such as removing dead code or reusing common subexpressions,
+needs an intermediate form to work on, and that is a separate change.
+
+The file format is versioned and checked on load. See
+[bytecode.md](bytecode.md#compiled-files).
+
 ## Stack limits
 
 Two separate bounds. Call depth is capped at 1024 frames. That alone does
@@ -337,6 +384,8 @@ These are real and they are not hidden:
   [Concurrency](#concurrency).
 - The collector stops the world and does not move objects.
 - Type annotations are parsed and ignored.
+- Optimisation is limited to peephole constant folding, because there is
+  no intermediate form to run a real pass over.
 - Code that makes many *distinct* strings is slow, because every string
   is interned. Reusing a small vocabulary is fast, which is why the
   `string` benchmark looks much worse than real programs do.

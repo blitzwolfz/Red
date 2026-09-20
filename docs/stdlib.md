@@ -24,6 +24,8 @@ interleave in the middle of a line.
 | `int(value)` | The number with its fractional part removed. |
 | `len(value)` | Length of a string, array, map or enum. |
 | `chr(code)` | A one character string for a byte value from 0 to 255. |
+| `set()` | An empty set. |
+| `set(source)` | A set from an array, a set or a string. |
 
 ```red
 print(type([]));        // array
@@ -215,6 +217,17 @@ export, and [`ffi/example_ext.c`](../ffi/example_ext.c) is a working one.
 | `sub(start)` `sub(start, end)` | A slice. Negative counts back from the end. |
 | `replace(from, to)` | Every match replaced. |
 | `repeat(count)` | The string repeated. |
+| `pad_left(width)` `pad_left(width, fill)` | Padded on the left to a width. Fill defaults to a space. |
+| `pad_right(width)` `pad_right(width, fill)` | Padded on the right. |
+
+Anything already at least that wide is returned unchanged, so one long
+entry never collapses a column.
+
+```red
+for (let [name, size] in rows) {
+  print(name.pad_right(10) + size.pad_left(5));
+}
+```
 
 ## Array methods
 
@@ -243,6 +256,19 @@ export, and [`ffi/example_ext.c`](../ffi/example_ext.c) is a working one.
 | `has(key)` `remove(key)` | |
 | `keys()` `values()` | Arrays, in no particular order. |
 | `entries()` | Each entry as a two element array, for `for (let [k, v] in m.entries())`. |
+
+## Set methods
+
+| Method | Result |
+|---|---|
+| `add(...)` | Adds values. Gives the set. |
+| `remove(value)` | `true` when it was there. |
+| `has(value)` | Is it in the set? |
+| `len()` | How many values. |
+| `items()` | The values as an array. |
+| `clear()` | Empties it. |
+| `union(other)` `intersect(other)` `difference(other)` | A new set. |
+| `equals(other)` | Compares contents. |
 
 ## Enum methods
 

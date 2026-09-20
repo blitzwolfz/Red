@@ -254,6 +254,48 @@ be longer than what it matches, and a field read never finds a method, so
 | `SPAWN` | count | `callee arg... -> task` |
 | `IMPORT` | constant | `-> module` |
 
+## Compiled files
+
+`red compile app.red` writes `app.redc`, and running that file skips the
+compiler. The layout is:
+
+```
+"REDC"            4 bytes
+version           4 bytes, fixed width
+<function>        the top level function, and everything under it
+```
+
+The version is fixed width on purpose, so that a file from another
+release is refused with a clear message rather than misread. Everything
+after it uses a variable length encoding: seven bits per byte, low group
+first, top bit set while more follow. Counts in a chunk are almost always
+small, so this is far smaller than four bytes each. Numbers stay eight
+bytes, since a double has no small form.
+
+A function record holds its name, its arity and slot counts, its
+parameter and return type annotations, its instruction bytes, its line
+runs, and its constants. A constant is one tagged byte followed by its
+contents. Nested functions appear inside their parent's constant pool, so
+one record carries the whole tree.
+
+Enums are written once and then referred to by position, because members
+compare by identity and two copies of one enum would not be equal.
+
+Imports stay dynamic: `IMPORT` still carries a path and still resolves
+when the instruction runs. So a compiled file finds its imports relative
+to where the compiled file is, not where its source was.
+
+## Constant folding
+
+The compiler folds arithmetic, bitwise operations and string joins on
+literals, so `2 + 3 * 4` becomes one `CONSTANT`. It is a peephole: the
+folder only acts when the two operands each emitted exactly one constant
+and nothing else came between them.
+
+Division and remainder by a literal zero are left alone, so they still
+report at run time where the line number and the call stack are
+available.
+
 ## Reading the output
 
 `red disasm file.red` prints every chunk. The columns are the byte
