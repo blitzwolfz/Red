@@ -71,6 +71,11 @@ inline bool isFalsey(Value v) {
   return isNil(v) || (isBool(v) && !asBool(v));
 }
 
+// Bitwise operators work on 32 bit integers. A Red number is a double,
+// so it is truncated towards zero and wrapped into that range first, the
+// same way JavaScript does it.
+int32_t toInt32(double value);
+
 bool valuesEqual(Value a, Value b);
 uint32_t hashValue(Value v);
 

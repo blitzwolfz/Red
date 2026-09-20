@@ -11,6 +11,22 @@ void Chunk::write(uint8_t byte, int line) {
   }
 }
 
+void Chunk::truncate(size_t newSize) {
+  if (newSize >= code.size()) return;
+  size_t removing = code.size() - newSize;
+  while (removing > 0 && !lines.empty()) {
+    LineRun& last = lines.back();
+    if ((size_t)last.count > removing) {
+      last.count -= (int)removing;
+      removing = 0;
+    } else {
+      removing -= (size_t)last.count;
+      lines.pop_back();
+    }
+  }
+  code.resize(newSize);
+}
+
 int Chunk::addConstant(Value value) {
   // Constants are deduplicated. A loop body that mentions the same literal
   // on every iteration then costs one pool slot instead of one per site.

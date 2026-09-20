@@ -122,6 +122,9 @@ class Chunk {
   std::vector<LineRun> lines;
 
   void write(uint8_t byte, int line);
+  // Drops everything from newSize onwards, line table included. Used by
+  // the constant folder to take back instructions it has replaced.
+  void truncate(size_t newSize);
   // Appends a constant and returns its index. Identical constants are
   // shared, which keeps the pool small for loops that reuse literals.
   int addConstant(Value value);
