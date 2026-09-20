@@ -1,0 +1,1253 @@
+#include "compiler.h"
+
+#include <cstdarg>
+#include <cstdio>
+#include <unordered_set>
+
+#include "debug.h"
+#include "scanner.h"
+
+namespace red {
+
+namespace {
+
+enum class Precedence {
+  None,
+  Assignment,  // =
+  Or,          // or
+  And,         // and
+  Equality,    // == !=
+  Comparison,  // < > <= >=
+  Term,        // + -
+  Factor,      // * / %
+  Unary,       // ! -
+  Call,        // . () []
+  Primary,
+};
+
+enum class FunctionKind {
+  Script,
+  Function,
+  Method,
+  Initializer,
+};
+
+struct Local {
+  std::string name;
+  int depth;
+  bool isCaptured;
+  bool isConst;
+};
+
+struct CompilerUpvalue {
+  uint8_t index;
+  bool isLocal;
+};
+
+// Tracks where break and continue should jump for the innermost loop.
+struct LoopState {
+  int continueTarget;
+  int scopeDepth;
+  std::vector<int> breakJumps;
+};
+
+constexpr int kMaxLocals = 256;
+constexpr int kMaxUpvalues = 256;
+
+}  // namespace
+
+class Compiler;
+using ParseFn = void (Compiler::*)(bool canAssign);
+
+struct ParseRule {
+  ParseFn prefix;
+  ParseFn infix;
+  Precedence precedence;
+};
+
+// One per function being compiled. They form a stack through `enclosing`,
+// which is how upvalue capture walks outwards.
+struct FunctionState {
+  FunctionState* enclosing = nullptr;
+  ObjFunction* function = nullptr;
+  FunctionKind kind = FunctionKind::Script;
+  std::vector<Local> locals;
+  CompilerUpvalue upvalues[kMaxUpvalues];
+  int scopeDepth = 0;
+  std::vector<LoopState> loops;
+};
+
+struct ClassState {
+  ClassState* enclosing = nullptr;
+  bool hasSuperclass = false;
+};
+
+class Compiler {
+ public:
+  Compiler(Runtime& runtime, const std::string& source, ObjModule* module,
+           bool quiet)
+      : runtime_(runtime), scanner_(source), module_(module), quiet_(quiet) {}
+
+  ObjFunction* compileScript();
+
+ private:
+  Runtime& runtime_;
+  Scanner scanner_;
+  ObjModule* module_;
+  Token current_;
+  Token previous_;
+  bool quiet_ = false;
+  bool hadError_ = false;
+  bool panicMode_ = false;
+  FunctionState* state_ = nullptr;
+  ClassState* classState_ = nullptr;
+  // Names declared const at module level. Checked at compile time only.
+  std::unordered_set<std::string> constGlobals_;
+  // Set while parsing the callee of `spawn`, so that the argument list is
+  // left for the spawn form itself to consume. It applies only to the
+  // callee's own top level, so any nested context clears it with the
+  // guard below.
+  bool suppressCall_ = false;
+
+  // Clears suppressCall_ for the lifetime of the guard. Every construct
+  // that opens a bracket and parses expressions inside it needs one, or a
+  // call written inside `spawn f(...)` would be suppressed too.
+  class AllowCalls {
+   public:
+    explicit AllowCalls(Compiler& compiler)
+        : compiler_(compiler), saved_(compiler.suppressCall_) {
+      compiler_.suppressCall_ = false;
+    }
+    ~AllowCalls() { compiler_.suppressCall_ = saved_; }
+
+   private:
+    Compiler& compiler_;
+    bool saved_;
+  };
+
+  Chunk& chunk() { return state_->function->chunk; }
+
+  // ---- token plumbing ----
+  void advance();
+  void consume(TokenType type, const char* message);
+  bool check(TokenType type) const { return current_.type == type; }
+  bool match(TokenType type);
+  void errorAt(const Token& token, const std::string& message);
+  void error(const std::string& message) { errorAt(previous_, message); }
+  void errorAtCurrent(const std::string& message) {
+    errorAt(current_, message);
+  }
+  void synchronize();
+
+  // ---- emitting ----
+  void emitByte(uint8_t byte);
+  void emitBytes(uint8_t a, uint8_t b);
+  void emitShort(int value);
+  int emitJump(uint8_t instruction);
+  void patchJump(int offset);
+  void emitLoop(int loopStart);
+  void emitReturn();
+  int makeConstant(Value value);
+  void emitConstant(Value value);
+  int identifierConstant(const std::string& name);
+
+  // ---- scopes and variables ----
+  void beginScope() { state_->scopeDepth++; }
+  void endScope();
+  void addLocal(const std::string& name, bool isConst);
+  void declareVariable(bool isConst);
+  int parseVariable(const char* message, bool isConst);
+  void markInitialized();
+  void defineVariable(int global, bool isConst);
+  int resolveLocal(FunctionState* state, const std::string& name);
+  int resolveUpvalue(FunctionState* state, const std::string& name);
+  int addUpvalue(FunctionState* state, uint8_t index, bool isLocal);
+  // Takes the name by value on purpose. It usually comes from
+  // previous_.lexeme, and match() below overwrites that token.
+  void namedVariable(std::string name, bool canAssign);
+  // Consumes an optional `: Type` annotation and returns its text.
+  std::string typeAnnotation();
+
+  // ---- declarations and statements ----
+  void declaration();
+  void classDeclaration();
+  void funDeclaration();
+  void varDeclaration(bool isConst);
+  void importDeclaration();
+  void statement();
+  void expressionStatement();
+  void block();
+  void ifStatement();
+  void whileStatement();
+  void forStatement();
+  void returnStatement();
+  void breakStatement();
+  void continueStatement();
+  void tryStatement();
+  void throwStatement();
+  void popLoopLocals(int targetDepth);
+
+  void function(FunctionKind kind, const std::string& name);
+  void method();
+
+  // ---- expressions ----
+  void expression();
+  void parsePrecedence(Precedence precedence);
+  uint8_t argumentList();
+
+  void grouping(bool canAssign);
+  void number(bool canAssign);
+  void stringLiteral(bool canAssign);
+  void interpolation(bool canAssign);
+  void literal(bool canAssign);
+  void variable(bool canAssign);
+  void unary(bool canAssign);
+  void binary(bool canAssign);
+  void call(bool canAssign);
+  void dot(bool canAssign);
+  void index(bool canAssign);
+  void andOp(bool canAssign);
+  void orOp(bool canAssign);
+  void arrayLiteral(bool canAssign);
+  void mapLiteral(bool canAssign);
+  void lambda(bool canAssign);
+  void thisExpr(bool canAssign);
+  void superExpr(bool canAssign);
+  void spawnExpr(bool canAssign);
+
+  static const ParseRule* getRule(TokenType type);
+};
+
+// ---------------------------------------------------------------------
+// token plumbing
+
+void Compiler::advance() {
+  previous_ = current_;
+  for (;;) {
+    current_ = scanner_.scan();
+    if (current_.type != TokenType::Error) break;
+    errorAtCurrent(current_.lexeme);
+  }
+}
+
+void Compiler::consume(TokenType type, const char* message) {
+  if (current_.type == type) {
+    advance();
+    return;
+  }
+  errorAtCurrent(message);
+}
+
+bool Compiler::match(TokenType type) {
+  if (!check(type)) return false;
+  advance();
+  return true;
+}
+
+void Compiler::errorAt(const Token& token, const std::string& message) {
+  // One report per statement. After the first, everything until the next
+  // statement boundary is noise caused by the first.
+  if (panicMode_) return;
+  panicMode_ = true;
+  hadError_ = true;
+  if (quiet_) return;
+
+  std::fprintf(stderr, "[%s line %d] Error",
+               module_->path->chars, token.line);
+  if (token.type == TokenType::Eof) {
+    std::fprintf(stderr, " at end");
+  } else if (token.type != TokenType::Error) {
+    std::fprintf(stderr, " at '%s'", token.lexeme.c_str());
+  }
+  std::fprintf(stderr, ": %s\n", message.c_str());
+}
+
+void Compiler::synchronize() {
+  panicMode_ = false;
+  while (current_.type != TokenType::Eof) {
+    if (previous_.type == TokenType::Semicolon) return;
+    switch (current_.type) {
+      case TokenType::Class:
+      case TokenType::Fun:
+      case TokenType::Let:
+      case TokenType::Const:
+      case TokenType::For:
+      case TokenType::If:
+      case TokenType::While:
+      case TokenType::Return:
+      case TokenType::Try:
+      case TokenType::Throw:
+      case TokenType::Import:
+        return;
+      default:
+        break;
+    }
+    advance();
+  }
+}
+
+// ---------------------------------------------------------------------
+// emitting
+
+void Compiler::emitByte(uint8_t byte) { chunk().write(byte, previous_.line); }
+
+void Compiler::emitBytes(uint8_t a, uint8_t b) {
+  emitByte(a);
+  emitByte(b);
+}
+
+void Compiler::emitShort(int value) {
+  emitByte((uint8_t)((value >> 8) & 0xff));
+  emitByte((uint8_t)(value & 0xff));
+}
+
+int Compiler::emitJump(uint8_t instruction) {
+  emitByte(instruction);
+  emitShort(0xffff);
+  return (int)chunk().code.size() - 2;
+}
+
+void Compiler::patchJump(int offset) {
+  int jump = (int)chunk().code.size() - offset - 2;
+  if (jump > 0xffff) error("Too much code to jump over.");
+  chunk().code[(size_t)offset] = (uint8_t)((jump >> 8) & 0xff);
+  chunk().code[(size_t)offset + 1] = (uint8_t)(jump & 0xff);
+}
+
+void Compiler::emitLoop(int loopStart) {
+  emitByte(OP_LOOP);
+  int offset = (int)chunk().code.size() - loopStart + 2;
+  if (offset > 0xffff) error("Loop body too large.");
+  emitShort(offset);
+}
+
+void Compiler::emitReturn() {
+  if (state_->kind == FunctionKind::Initializer) {
+    // An initializer always answers with the instance, whatever the body
+    // did, so `let a = Animal("cat")` never yields nil by accident.
+    emitByte(OP_GET_LOCAL);
+    emitByte(0);
+  } else {
+    emitByte(OP_NIL);
+  }
+  emitByte(OP_RETURN);
+}
+
+int Compiler::makeConstant(Value value) {
+  int constant = chunk().addConstant(value);
+  if (constant > 0xffff) {
+    error("Too many constants in one chunk.");
+    return 0;
+  }
+  return constant;
+}
+
+void Compiler::emitConstant(Value value) {
+  emitByte(OP_CONSTANT);
+  emitShort(makeConstant(value));
+}
+
+int Compiler::identifierConstant(const std::string& name) {
+  return makeConstant(objValue((Obj*)runtime_.internString(name)));
+}
+
+// ---------------------------------------------------------------------
+// scopes and variables
+
+void Compiler::endScope() {
+  state_->scopeDepth--;
+  while (!state_->locals.empty() &&
+         state_->locals.back().depth > state_->scopeDepth) {
+    // A captured local lives on in an upvalue, so it has to be moved to
+    // the heap rather than simply discarded.
+    if (state_->locals.back().isCaptured) {
+      emitByte(OP_CLOSE_UPVALUE);
+    } else {
+      emitByte(OP_POP);
+    }
+    state_->locals.pop_back();
+  }
+}
+
+void Compiler::addLocal(const std::string& name, bool isConst) {
+  if ((int)state_->locals.size() >= kMaxLocals) {
+    error("Too many local variables in function.");
+    return;
+  }
+  state_->locals.push_back({name, -1, false, isConst});
+}
+
+void Compiler::declareVariable(bool isConst) {
+  if (state_->scopeDepth == 0) return;
+  const std::string& name = previous_.lexeme;
+  for (int i = (int)state_->locals.size() - 1; i >= 0; i--) {
+    Local& local = state_->locals[(size_t)i];
+    if (local.depth != -1 && local.depth < state_->scopeDepth) break;
+    if (local.name == name) {
+      error("A variable with this name already exists in this scope.");
+    }
+  }
+  addLocal(name, isConst);
+}
+
+int Compiler::parseVariable(const char* message, bool isConst) {
+  consume(TokenType::Identifier, message);
+  declareVariable(isConst);
+  if (state_->scopeDepth > 0) return 0;
+  if (isConst) constGlobals_.insert(previous_.lexeme);
+  return identifierConstant(previous_.lexeme);
+}
+
+void Compiler::markInitialized() {
+  if (state_->scopeDepth == 0) return;
+  state_->locals.back().depth = state_->scopeDepth;
+}
+
+void Compiler::defineVariable(int global, bool isConst) {
+  (void)isConst;
+  if (state_->scopeDepth > 0) {
+    markInitialized();
+    return;
+  }
+  emitByte(OP_DEFINE_GLOBAL);
+  emitShort(global);
+}
+
+int Compiler::resolveLocal(FunctionState* state, const std::string& name) {
+  for (int i = (int)state->locals.size() - 1; i >= 0; i--) {
+    if (state->locals[(size_t)i].name == name) {
+      if (state->locals[(size_t)i].depth == -1) {
+        error("Cannot read a local variable inside its own initializer.");
+      }
+      return i;
+    }
+  }
+  return -1;
+}
+
+int Compiler::addUpvalue(FunctionState* state, uint8_t index, bool isLocal) {
+  int count = state->function->upvalueCount;
+  for (int i = 0; i < count; i++) {
+    if (state->upvalues[i].index == index &&
+        state->upvalues[i].isLocal == isLocal) {
+      return i;
+    }
+  }
+  if (count == kMaxUpvalues) {
+    error("Too many closure variables in function.");
+    return 0;
+  }
+  state->upvalues[count].isLocal = isLocal;
+  state->upvalues[count].index = index;
+  return state->function->upvalueCount++;
+}
+
+int Compiler::resolveUpvalue(FunctionState* state, const std::string& name) {
+  if (state->enclosing == nullptr) return -1;
+
+  int local = resolveLocal(state->enclosing, name);
+  if (local != -1) {
+    state->enclosing->locals[(size_t)local].isCaptured = true;
+    return addUpvalue(state, (uint8_t)local, true);
+  }
+  // Not a direct parent local, so look further out. Each level adds one
+  // hop, which is what makes deeply nested closures work.
+  int upvalue = resolveUpvalue(state->enclosing, name);
+  if (upvalue != -1) return addUpvalue(state, (uint8_t)upvalue, false);
+  return -1;
+}
+
+void Compiler::namedVariable(std::string name, bool canAssign) {
+  uint8_t getOp, setOp;
+  bool isConstLocal = false;
+  int arg = resolveLocal(state_, name);
+  if (arg != -1) {
+    getOp = OP_GET_LOCAL;
+    setOp = OP_SET_LOCAL;
+    isConstLocal = state_->locals[(size_t)arg].isConst;
+  } else if ((arg = resolveUpvalue(state_, name)) != -1) {
+    getOp = OP_GET_UPVALUE;
+    setOp = OP_SET_UPVALUE;
+  } else {
+    arg = identifierConstant(name);
+    getOp = OP_GET_GLOBAL;
+    setOp = OP_SET_GLOBAL;
+  }
+
+  if (canAssign && match(TokenType::Equal)) {
+    if (isConstLocal || (getOp == OP_GET_GLOBAL &&
+                         constGlobals_.count(name) > 0)) {
+      error("Cannot assign to a const binding.");
+    }
+    expression();
+    emitByte(setOp);
+    if (setOp == OP_SET_GLOBAL) {
+      emitShort(arg);
+    } else {
+      emitByte((uint8_t)arg);
+    }
+  } else {
+    emitByte(getOp);
+    if (getOp == OP_GET_GLOBAL) {
+      emitShort(arg);
+    } else {
+      emitByte((uint8_t)arg);
+    }
+  }
+}
+
+std::string Compiler::typeAnnotation() {
+  if (!match(TokenType::Colon)) return "";
+  consume(TokenType::Identifier, "Expect a type name after ':'.");
+  std::string name = previous_.lexeme;
+  // Allow array-of and map-of spellings such as `[Int]` without giving
+  // them meaning. Nothing checks annotations.
+  while (match(TokenType::LeftBracket)) {
+    consume(TokenType::RightBracket, "Expect ']' in type name.");
+    name += "[]";
+  }
+  return name;
+}
+
+// ---------------------------------------------------------------------
+// declarations
+
+void Compiler::declaration() {
+  if (match(TokenType::Class)) {
+    classDeclaration();
+  } else if (match(TokenType::Fun)) {
+    funDeclaration();
+  } else if (match(TokenType::Let)) {
+    varDeclaration(false);
+  } else if (match(TokenType::Const)) {
+    varDeclaration(true);
+  } else if (match(TokenType::Import)) {
+    importDeclaration();
+  } else {
+    statement();
+  }
+  if (panicMode_) synchronize();
+}
+
+void Compiler::varDeclaration(bool isConst) {
+  int global = parseVariable("Expect a variable name.", isConst);
+  typeAnnotation();
+
+  if (match(TokenType::Equal)) {
+    expression();
+  } else if (isConst) {
+    error("A const binding must have an initializer.");
+    emitByte(OP_NIL);
+  } else {
+    emitByte(OP_NIL);
+  }
+  consume(TokenType::Semicolon, "Expect ';' after a variable declaration.");
+  defineVariable(global, isConst);
+}
+
+void Compiler::funDeclaration() {
+  int global = parseVariable("Expect a function name.", false);
+  std::string name = previous_.lexeme;
+  // Marked before the body is compiled so a function can call itself.
+  markInitialized();
+  function(FunctionKind::Function, name);
+  defineVariable(global, false);
+}
+
+void Compiler::importDeclaration() {
+  consume(TokenType::String, "Expect a module path string after 'import'.");
+  std::string path = previous_.text;
+  int pathConstant = makeConstant(objValue((Obj*)runtime_.internString(path)));
+
+  std::string binding;
+  if (match(TokenType::As)) {
+    consume(TokenType::Identifier, "Expect a name after 'as'.");
+    binding = previous_.lexeme;
+  } else {
+    // Default the binding to the file stem, so `import "util.red";` binds
+    // the name `util`.
+    size_t slash = path.find_last_of('/');
+    binding = slash == std::string::npos ? path : path.substr(slash + 1);
+    size_t dot = binding.find_last_of('.');
+    if (dot != std::string::npos) binding = binding.substr(0, dot);
+  }
+  consume(TokenType::Semicolon, "Expect ';' after an import.");
+
+  emitByte(OP_IMPORT);
+  emitShort(pathConstant);
+
+  if (state_->scopeDepth > 0) {
+    addLocal(binding, true);
+    markInitialized();
+  } else {
+    int global = identifierConstant(binding);
+    constGlobals_.insert(binding);
+    emitByte(OP_DEFINE_GLOBAL);
+    emitShort(global);
+  }
+}
+
+void Compiler::classDeclaration() {
+  consume(TokenType::Identifier, "Expect a class name.");
+  std::string className = previous_.lexeme;
+  int nameConstant = identifierConstant(className);
+  declareVariable(false);
+
+  emitByte(OP_CLASS);
+  emitShort(nameConstant);
+  defineVariable(nameConstant, false);
+
+  ClassState classState;
+  classState.enclosing = classState_;
+  classState_ = &classState;
+
+  if (match(TokenType::Less)) {
+    consume(TokenType::Identifier, "Expect a superclass name.");
+    variable(false);
+    if (className == previous_.lexeme) {
+      error("A class cannot inherit from itself.");
+    }
+    // `super` is resolved as an upvalue, so it needs a scope of its own
+    // that outlives the method bodies that capture it.
+    beginScope();
+    addLocal("super", true);
+    markInitialized();
+
+    namedVariable(className, false);
+    emitByte(OP_INHERIT);
+    classState.hasSuperclass = true;
+  }
+
+  namedVariable(className, false);
+  consume(TokenType::LeftBrace, "Expect '{' before a class body.");
+  while (!check(TokenType::RightBrace) && !check(TokenType::Eof)) {
+    method();
+  }
+  consume(TokenType::RightBrace, "Expect '}' after a class body.");
+  emitByte(OP_POP);
+
+  if (classState.hasSuperclass) endScope();
+  classState_ = classState.enclosing;
+}
+
+void Compiler::method() {
+  consume(TokenType::Identifier, "Expect a method name.");
+  std::string name = previous_.lexeme;
+  int constant = identifierConstant(name);
+  FunctionKind kind =
+      name == "init" ? FunctionKind::Initializer : FunctionKind::Method;
+  function(kind, name);
+  emitByte(OP_METHOD);
+  emitShort(constant);
+}
+
+void Compiler::function(FunctionKind kind, const std::string& name) {
+  AllowCalls allowCalls(*this);
+  FunctionState state;
+  state.enclosing = state_;
+  state.kind = kind;
+  state.function = runtime_.newFunction(module_);
+  // The function is only reachable from a C++ local until it becomes a
+  // constant in the enclosing chunk, so it has to be rooted across every
+  // allocation the body performs.
+  runtime_.pushRoot((Obj*)state.function);
+  if (!name.empty()) state.function->name = runtime_.internString(name);
+
+  // Slot zero holds the receiver for methods and the function itself
+  // otherwise. Naming it makes `this` resolve like any other local.
+  state.locals.push_back(
+      {kind == FunctionKind::Function || kind == FunctionKind::Script ? ""
+                                                                      : "this",
+       0, false, true});
+  state_ = &state;
+  beginScope();
+
+  consume(TokenType::LeftParen, "Expect '(' after a function name.");
+  if (!check(TokenType::RightParen)) {
+    do {
+      state_->function->arity++;
+      if (state_->function->arity > 255) {
+        errorAtCurrent("Cannot have more than 255 parameters.");
+      }
+      int constant = parseVariable("Expect a parameter name.", false);
+      std::string annotation = typeAnnotation();
+      state_->function->paramTypes.push_back(annotation);
+      defineVariable(constant, false);
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RightParen, "Expect ')' after parameters.");
+
+  if (match(TokenType::Arrow)) {
+    consume(TokenType::Identifier, "Expect a return type name after '->'.");
+    state_->function->returnType = previous_.lexeme;
+  }
+
+  consume(TokenType::LeftBrace, "Expect '{' before a function body.");
+  block();
+
+  emitReturn();
+  ObjFunction* function = state.function;
+  state_ = state.enclosing;
+  runtime_.popRoot();
+
+  emitByte(OP_CLOSURE);
+  emitShort(makeConstant(objValue((Obj*)function)));
+  for (int i = 0; i < function->upvalueCount; i++) {
+    emitByte(state.upvalues[i].isLocal ? 1 : 0);
+    emitByte(state.upvalues[i].index);
+  }
+}
+
+// ---------------------------------------------------------------------
+// statements
+
+void Compiler::statement() {
+  if (match(TokenType::If)) {
+    ifStatement();
+  } else if (match(TokenType::While)) {
+    whileStatement();
+  } else if (match(TokenType::For)) {
+    forStatement();
+  } else if (match(TokenType::Return)) {
+    returnStatement();
+  } else if (match(TokenType::Break)) {
+    breakStatement();
+  } else if (match(TokenType::Continue)) {
+    continueStatement();
+  } else if (match(TokenType::Try)) {
+    tryStatement();
+  } else if (match(TokenType::Throw)) {
+    throwStatement();
+  } else if (match(TokenType::LeftBrace)) {
+    beginScope();
+    block();
+    endScope();
+  } else {
+    expressionStatement();
+  }
+}
+
+void Compiler::block() {
+  while (!check(TokenType::RightBrace) && !check(TokenType::Eof)) {
+    declaration();
+  }
+  consume(TokenType::RightBrace, "Expect '}' after a block.");
+}
+
+void Compiler::expressionStatement() {
+  expression();
+  consume(TokenType::Semicolon, "Expect ';' after an expression.");
+  emitByte(OP_POP);
+}
+
+void Compiler::ifStatement() {
+  consume(TokenType::LeftParen, "Expect '(' after 'if'.");
+  expression();
+  consume(TokenType::RightParen, "Expect ')' after a condition.");
+
+  int thenJump = emitJump(OP_JUMP_IF_FALSE);
+  emitByte(OP_POP);
+  statement();
+  int elseJump = emitJump(OP_JUMP);
+
+  patchJump(thenJump);
+  emitByte(OP_POP);
+  if (match(TokenType::Else)) statement();
+  patchJump(elseJump);
+}
+
+void Compiler::whileStatement() {
+  int loopStart = (int)chunk().code.size();
+  state_->loops.push_back({loopStart, state_->scopeDepth, {}});
+
+  consume(TokenType::LeftParen, "Expect '(' after 'while'.");
+  expression();
+  consume(TokenType::RightParen, "Expect ')' after a condition.");
+
+  int exitJump = emitJump(OP_JUMP_IF_FALSE);
+  emitByte(OP_POP);
+  statement();
+  emitLoop(loopStart);
+
+  patchJump(exitJump);
+  emitByte(OP_POP);
+
+  for (int jump : state_->loops.back().breakJumps) patchJump(jump);
+  state_->loops.pop_back();
+}
+
+void Compiler::forStatement() {
+  beginScope();
+  consume(TokenType::LeftParen, "Expect '(' after 'for'.");
+
+  if (match(TokenType::Semicolon)) {
+    // No initializer.
+  } else if (match(TokenType::Let)) {
+    varDeclaration(false);
+  } else {
+    expressionStatement();
+  }
+
+  int loopStart = (int)chunk().code.size();
+  int exitJump = -1;
+  if (!match(TokenType::Semicolon)) {
+    expression();
+    consume(TokenType::Semicolon, "Expect ';' after a loop condition.");
+    exitJump = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP);
+  }
+
+  // The increment is compiled before the body but has to run after it, so
+  // it is jumped over on the way in and jumped back to on the way out.
+  int continueTarget = loopStart;
+  if (!match(TokenType::RightParen)) {
+    int bodyJump = emitJump(OP_JUMP);
+    int incrementStart = (int)chunk().code.size();
+    expression();
+    emitByte(OP_POP);
+    consume(TokenType::RightParen, "Expect ')' after for clauses.");
+    emitLoop(loopStart);
+    loopStart = incrementStart;
+    continueTarget = incrementStart;
+    patchJump(bodyJump);
+  }
+
+  state_->loops.push_back({continueTarget, state_->scopeDepth, {}});
+  statement();
+  emitLoop(loopStart);
+
+  if (exitJump != -1) {
+    patchJump(exitJump);
+    emitByte(OP_POP);
+  }
+  for (int jump : state_->loops.back().breakJumps) patchJump(jump);
+  state_->loops.pop_back();
+  endScope();
+}
+
+void Compiler::popLoopLocals(int targetDepth) {
+  for (int i = (int)state_->locals.size() - 1; i >= 0; i--) {
+    if (state_->locals[(size_t)i].depth <= targetDepth) break;
+    emitByte(state_->locals[(size_t)i].isCaptured ? OP_CLOSE_UPVALUE : OP_POP);
+  }
+}
+
+void Compiler::breakStatement() {
+  if (state_->loops.empty()) {
+    error("Cannot use 'break' outside a loop.");
+    return;
+  }
+  consume(TokenType::Semicolon, "Expect ';' after 'break'.");
+  popLoopLocals(state_->loops.back().scopeDepth);
+  state_->loops.back().breakJumps.push_back(emitJump(OP_JUMP));
+}
+
+void Compiler::continueStatement() {
+  if (state_->loops.empty()) {
+    error("Cannot use 'continue' outside a loop.");
+    return;
+  }
+  consume(TokenType::Semicolon, "Expect ';' after 'continue'.");
+  popLoopLocals(state_->loops.back().scopeDepth);
+  emitLoop(state_->loops.back().continueTarget);
+}
+
+void Compiler::returnStatement() {
+  if (state_->kind == FunctionKind::Script) {
+    error("Cannot return from top level code.");
+  }
+  if (match(TokenType::Semicolon)) {
+    emitReturn();
+    return;
+  }
+  if (state_->kind == FunctionKind::Initializer) {
+    error("Cannot return a value from an initializer.");
+  }
+  expression();
+  consume(TokenType::Semicolon, "Expect ';' after a return value.");
+  emitByte(OP_RETURN);
+}
+
+void Compiler::tryStatement() {
+  int handlerJump = emitJump(OP_TRY_BEGIN);
+  beginScope();
+  consume(TokenType::LeftBrace, "Expect '{' after 'try'.");
+  block();
+  endScope();
+  emitByte(OP_TRY_END);
+  int doneJump = emitJump(OP_JUMP);
+
+  // Control arrives here with the stack cut back to its depth at
+  // TRY_BEGIN and the error value pushed on top, so the catch name lines
+  // up with a plain local slot.
+  patchJump(handlerJump);
+  beginScope();
+  consume(TokenType::Catch, "Expect 'catch' after a try block.");
+  consume(TokenType::LeftParen, "Expect '(' after 'catch'.");
+  consume(TokenType::Identifier, "Expect an error variable name.");
+  addLocal(previous_.lexeme, false);
+  markInitialized();
+  consume(TokenType::RightParen, "Expect ')' after the error variable.");
+  consume(TokenType::LeftBrace, "Expect '{' before a catch block.");
+  block();
+  endScope();
+
+  patchJump(doneJump);
+}
+
+void Compiler::throwStatement() {
+  expression();
+  consume(TokenType::Semicolon, "Expect ';' after a thrown value.");
+  emitByte(OP_THROW);
+}
+
+// ---------------------------------------------------------------------
+// expressions
+
+void Compiler::expression() { parsePrecedence(Precedence::Assignment); }
+
+void Compiler::parsePrecedence(Precedence precedence) {
+  advance();
+  ParseFn prefixRule = getRule(previous_.type)->prefix;
+  if (prefixRule == nullptr) {
+    error("Expect an expression.");
+    return;
+  }
+
+  bool canAssign = precedence <= Precedence::Assignment;
+  (this->*prefixRule)(canAssign);
+
+  for (;;) {
+    // While parsing the callee of `spawn`, stop before the argument list
+    // so that the spawn form can consume it itself.
+    if (suppressCall_ && check(TokenType::LeftParen)) break;
+    if (precedence > getRule(current_.type)->precedence) break;
+    advance();
+    ParseFn infixRule = getRule(previous_.type)->infix;
+    (this->*infixRule)(canAssign);
+  }
+
+  if (canAssign && match(TokenType::Equal)) {
+    error("Invalid assignment target.");
+  }
+}
+
+uint8_t Compiler::argumentList() {
+  AllowCalls allowCalls(*this);
+  uint8_t count = 0;
+  if (!check(TokenType::RightParen)) {
+    do {
+      expression();
+      if (count == 255) error("Cannot pass more than 255 arguments.");
+      count++;
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RightParen, "Expect ')' after arguments.");
+  return count;
+}
+
+void Compiler::grouping(bool) {
+  AllowCalls allowCalls(*this);
+  expression();
+  consume(TokenType::RightParen, "Expect ')' after an expression.");
+}
+
+void Compiler::number(bool) { emitConstant(numberValue(previous_.number)); }
+
+void Compiler::stringLiteral(bool) {
+  emitConstant(objValue((Obj*)runtime_.internString(previous_.text)));
+}
+
+void Compiler::interpolation(bool) {
+  AllowCalls allowCalls(*this);
+  // "a${x}b" compiles to the same code as "a" + str(x) + "b". The literal
+  // parts are emitted even when empty so the result is always a string.
+  emitConstant(objValue((Obj*)runtime_.internString(previous_.text)));
+  for (;;) {
+    expression();
+    emitByte(OP_TO_STRING);
+    emitByte(OP_ADD);
+
+    if (match(TokenType::StringInterp)) {
+      emitConstant(objValue((Obj*)runtime_.internString(previous_.text)));
+      emitByte(OP_ADD);
+      continue;
+    }
+    if (match(TokenType::String)) {
+      emitConstant(objValue((Obj*)runtime_.internString(previous_.text)));
+      emitByte(OP_ADD);
+      break;
+    }
+    errorAtCurrent("Unterminated string interpolation.");
+    break;
+  }
+}
+
+void Compiler::literal(bool) {
+  switch (previous_.type) {
+    case TokenType::False: emitByte(OP_FALSE); break;
+    case TokenType::Nil: emitByte(OP_NIL); break;
+    case TokenType::True: emitByte(OP_TRUE); break;
+    default: break;
+  }
+}
+
+void Compiler::variable(bool canAssign) {
+  namedVariable(previous_.lexeme, canAssign);
+}
+
+void Compiler::unary(bool) {
+  TokenType op = previous_.type;
+  parsePrecedence(Precedence::Unary);
+  switch (op) {
+    case TokenType::Bang: emitByte(OP_NOT); break;
+    case TokenType::Minus: emitByte(OP_NEGATE); break;
+    default: break;
+  }
+}
+
+void Compiler::binary(bool) {
+  TokenType op = previous_.type;
+  const ParseRule* rule = getRule(op);
+  parsePrecedence((Precedence)((int)rule->precedence + 1));
+
+  switch (op) {
+    case TokenType::BangEqual: emitByte(OP_NOT_EQUAL); break;
+    case TokenType::EqualEqual: emitByte(OP_EQUAL); break;
+    case TokenType::Greater: emitByte(OP_GREATER); break;
+    case TokenType::GreaterEqual: emitByte(OP_GREATER_EQUAL); break;
+    case TokenType::Less: emitByte(OP_LESS); break;
+    case TokenType::LessEqual: emitByte(OP_LESS_EQUAL); break;
+    case TokenType::Plus: emitByte(OP_ADD); break;
+    case TokenType::Minus: emitByte(OP_SUBTRACT); break;
+    case TokenType::Star: emitByte(OP_MULTIPLY); break;
+    case TokenType::Slash: emitByte(OP_DIVIDE); break;
+    case TokenType::Percent: emitByte(OP_MODULO); break;
+    default: break;
+  }
+}
+
+void Compiler::call(bool) {
+  uint8_t argCount = argumentList();
+  emitBytes(OP_CALL, argCount);
+}
+
+void Compiler::dot(bool canAssign) {
+  consume(TokenType::Identifier, "Expect a property name after '.'.");
+  int name = identifierConstant(previous_.lexeme);
+
+  if (canAssign && match(TokenType::Equal)) {
+    expression();
+    emitByte(OP_SET_PROPERTY);
+    emitShort(name);
+  } else if (!suppressCall_ && match(TokenType::LeftParen)) {
+    // Fusing the lookup and the call saves allocating a bound method for
+    // the common `obj.method(...)` shape.
+    uint8_t argCount = argumentList();
+    emitByte(OP_INVOKE);
+    emitShort(name);
+    emitByte(argCount);
+  } else {
+    emitByte(OP_GET_PROPERTY);
+    emitShort(name);
+  }
+}
+
+void Compiler::index(bool canAssign) {
+  AllowCalls allowCalls(*this);
+  expression();
+  consume(TokenType::RightBracket, "Expect ']' after an index.");
+  if (canAssign && match(TokenType::Equal)) {
+    expression();
+    emitByte(OP_SET_INDEX);
+  } else {
+    emitByte(OP_GET_INDEX);
+  }
+}
+
+void Compiler::andOp(bool) {
+  int endJump = emitJump(OP_JUMP_IF_FALSE);
+  emitByte(OP_POP);
+  parsePrecedence(Precedence::And);
+  patchJump(endJump);
+}
+
+void Compiler::orOp(bool) {
+  int endJump = emitJump(OP_JUMP_IF_TRUE);
+  emitByte(OP_POP);
+  parsePrecedence(Precedence::Or);
+  patchJump(endJump);
+}
+
+void Compiler::arrayLiteral(bool) {
+  AllowCalls allowCalls(*this);
+  int count = 0;
+  if (!check(TokenType::RightBracket)) {
+    do {
+      if (check(TokenType::RightBracket)) break;  // allow a trailing comma
+      expression();
+      count++;
+      if (count > 0xffff) error("Too many elements in an array literal.");
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RightBracket, "Expect ']' after array elements.");
+  emitByte(OP_ARRAY);
+  emitShort(count);
+}
+
+void Compiler::mapLiteral(bool) {
+  AllowCalls allowCalls(*this);
+  int count = 0;
+  if (!check(TokenType::RightBrace)) {
+    do {
+      if (check(TokenType::RightBrace)) break;  // allow a trailing comma
+      expression();
+      consume(TokenType::Colon, "Expect ':' after a map key.");
+      expression();
+      count++;
+      if (count > 0xffff) error("Too many entries in a map literal.");
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RightBrace, "Expect '}' after map entries.");
+  emitByte(OP_MAP);
+  emitShort(count);
+}
+
+void Compiler::lambda(bool) { function(FunctionKind::Function, ""); }
+
+void Compiler::thisExpr(bool) {
+  if (classState_ == nullptr) {
+    error("Cannot use 'this' outside a class.");
+    return;
+  }
+  variable(false);
+}
+
+void Compiler::superExpr(bool) {
+  if (classState_ == nullptr) {
+    error("Cannot use 'super' outside a class.");
+  } else if (!classState_->hasSuperclass) {
+    error("Cannot use 'super' in a class with no superclass.");
+  }
+  consume(TokenType::Dot, "Expect '.' after 'super'.");
+  consume(TokenType::Identifier, "Expect a superclass method name.");
+  int name = identifierConstant(previous_.lexeme);
+
+  namedVariable("this", false);
+  if (!suppressCall_ && match(TokenType::LeftParen)) {
+    uint8_t argCount = argumentList();
+    namedVariable("super", false);
+    emitByte(OP_SUPER_INVOKE);
+    emitShort(name);
+    emitByte(argCount);
+  } else {
+    namedVariable("super", false);
+    emitByte(OP_GET_SUPER);
+    emitShort(name);
+  }
+}
+
+void Compiler::spawnExpr(bool) {
+  // The callee is parsed with calls suppressed, so `spawn worker(ch)`
+  // leaves the argument list here rather than compiling a normal call.
+  bool previousSuppress = suppressCall_;
+  suppressCall_ = true;
+  parsePrecedence(Precedence::Call);
+  suppressCall_ = previousSuppress;
+
+  consume(TokenType::LeftParen, "Expect '(' after a spawn target.");
+  uint8_t argCount = argumentList();
+  emitBytes(OP_SPAWN, argCount);
+}
+
+// ---------------------------------------------------------------------
+
+const ParseRule* Compiler::getRule(TokenType type) {
+  static const ParseRule rules[] = {
+      /* LeftParen    */ {&Compiler::grouping, &Compiler::call, Precedence::Call},
+      /* RightParen   */ {nullptr, nullptr, Precedence::None},
+      /* LeftBrace    */ {&Compiler::mapLiteral, nullptr, Precedence::None},
+      /* RightBrace   */ {nullptr, nullptr, Precedence::None},
+      /* LeftBracket  */ {&Compiler::arrayLiteral, &Compiler::index, Precedence::Call},
+      /* RightBracket */ {nullptr, nullptr, Precedence::None},
+      /* Comma        */ {nullptr, nullptr, Precedence::None},
+      /* Dot          */ {nullptr, &Compiler::dot, Precedence::Call},
+      /* Minus        */ {&Compiler::unary, &Compiler::binary, Precedence::Term},
+      /* Plus         */ {nullptr, &Compiler::binary, Precedence::Term},
+      /* Semicolon    */ {nullptr, nullptr, Precedence::None},
+      /* Slash        */ {nullptr, &Compiler::binary, Precedence::Factor},
+      /* Star         */ {nullptr, &Compiler::binary, Precedence::Factor},
+      /* Percent      */ {nullptr, &Compiler::binary, Precedence::Factor},
+      /* Colon        */ {nullptr, nullptr, Precedence::None},
+      /* Arrow        */ {nullptr, nullptr, Precedence::None},
+      /* Bang         */ {&Compiler::unary, nullptr, Precedence::None},
+      /* BangEqual    */ {nullptr, &Compiler::binary, Precedence::Equality},
+      /* Equal        */ {nullptr, nullptr, Precedence::None},
+      /* EqualEqual   */ {nullptr, &Compiler::binary, Precedence::Equality},
+      /* Greater      */ {nullptr, &Compiler::binary, Precedence::Comparison},
+      /* GreaterEqual */ {nullptr, &Compiler::binary, Precedence::Comparison},
+      /* Less         */ {nullptr, &Compiler::binary, Precedence::Comparison},
+      /* LessEqual    */ {nullptr, &Compiler::binary, Precedence::Comparison},
+      /* Identifier   */ {&Compiler::variable, nullptr, Precedence::None},
+      /* String       */ {&Compiler::stringLiteral, nullptr, Precedence::None},
+      /* StringInterp */ {&Compiler::interpolation, nullptr, Precedence::None},
+      /* Number       */ {&Compiler::number, nullptr, Precedence::None},
+      /* And          */ {nullptr, &Compiler::andOp, Precedence::And},
+      /* Break        */ {nullptr, nullptr, Precedence::None},
+      /* Catch        */ {nullptr, nullptr, Precedence::None},
+      /* Class        */ {nullptr, nullptr, Precedence::None},
+      /* Const        */ {nullptr, nullptr, Precedence::None},
+      /* Continue     */ {nullptr, nullptr, Precedence::None},
+      /* Else         */ {nullptr, nullptr, Precedence::None},
+      /* False        */ {&Compiler::literal, nullptr, Precedence::None},
+      /* For          */ {nullptr, nullptr, Precedence::None},
+      /* Fun          */ {&Compiler::lambda, nullptr, Precedence::None},
+      /* If           */ {nullptr, nullptr, Precedence::None},
+      /* Import       */ {nullptr, nullptr, Precedence::None},
+      /* Let          */ {nullptr, nullptr, Precedence::None},
+      /* Nil          */ {&Compiler::literal, nullptr, Precedence::None},
+      /* Or           */ {nullptr, &Compiler::orOp, Precedence::Or},
+      /* Return       */ {nullptr, nullptr, Precedence::None},
+      /* Spawn        */ {&Compiler::spawnExpr, nullptr, Precedence::None},
+      /* Super        */ {&Compiler::superExpr, nullptr, Precedence::None},
+      /* This         */ {&Compiler::thisExpr, nullptr, Precedence::None},
+      /* Throw        */ {nullptr, nullptr, Precedence::None},
+      /* True         */ {&Compiler::literal, nullptr, Precedence::None},
+      /* Try          */ {nullptr, nullptr, Precedence::None},
+      /* While        */ {nullptr, nullptr, Precedence::None},
+      /* As           */ {nullptr, nullptr, Precedence::None},
+      /* Error        */ {nullptr, nullptr, Precedence::None},
+      /* Eof          */ {nullptr, nullptr, Precedence::None},
+  };
+  static_assert(sizeof(rules) / sizeof(ParseRule) ==
+                    (size_t)TokenType::Eof + 1,
+                "Parse rule table must cover every token type.");
+  return &rules[(size_t)type];
+}
+
+ObjFunction* Compiler::compileScript() {
+  FunctionState state;
+  state.kind = FunctionKind::Script;
+  state.function = runtime_.newFunction(module_);
+  runtime_.pushRoot((Obj*)state.function);
+  state.locals.push_back({"", 0, false, true});
+  state_ = &state;
+
+  advance();
+  while (!match(TokenType::Eof)) {
+    declaration();
+  }
+  emitReturn();
+
+  runtime_.popRoot();
+  state_ = nullptr;
+  return hadError_ ? nullptr : state.function;
+}
+
+ObjFunction* compile(Runtime& runtime, const std::string& source,
+                     ObjModule* module, bool quiet) {
+  Compiler compiler(runtime, source, module, quiet);
+  return compiler.compileScript();
+}
+
+}  // namespace red
