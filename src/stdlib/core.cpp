@@ -97,9 +97,11 @@ Value nativeLen(VM& vm, int, Value* args) {
   if (isString(value)) return numberValue((double)asString(value)->length);
   if (isArray(value)) return numberValue((double)asArray(value)->items.size());
   if (isMap(value)) return numberValue((double)asMap(value)->entries.count());
+  if (isSet(value)) return numberValue((double)asSet(value)->entries.count());
   if (isEnum(value)) return numberValue((double)asEnum(value)->ordered.size());
-  return vm.fail("len() expects a string, array or map, got %s.",
-                 valueTypeName(value));
+  return vm.failAs("type",
+                   "len() expects a string, array, map, set or enum, got %s.",
+                   valueTypeName(value));
 }
 
 Value nativeAssert(VM& vm, int argCount, Value* args) {
@@ -398,6 +400,39 @@ Value stringReplace(VM& vm, int, Value* args) {
   }
   out += text.substr(start);
   return objValue((Obj*)vm.runtime().copyString(out.data(), out.size()));
+}
+
+// Pads to a width. Anything already that wide is returned unchanged, so
+// a column never collapses because one entry was long.
+Value padWith(VM& vm, int argCount, Value* args, bool onLeft) {
+  const char* who = onLeft ? "pad_left()" : "pad_right()";
+  double width;
+  if (!wantNumber(vm, args[1], who, &width)) return nilValue();
+
+  std::string fill = " ";
+  if (argCount > 2) {
+    ObjString* given;
+    if (!wantString(vm, args[2], who, &given)) return nilValue();
+    fill.assign(given->chars, given->length);
+    if (fill.size() != 1) {
+      return vm.failAs("value", "%s fill must be one character, got %zu.", who,
+                       fill.size());
+    }
+  }
+
+  std::string text = textOf(asString(args[0]));
+  if ((double)text.size() >= width) return args[0];
+  std::string padding((size_t)width - text.size(), fill[0]);
+  std::string result = onLeft ? padding + text : text + padding;
+  return objValue((Obj*)vm.runtime().copyString(result.data(), result.size()));
+}
+
+Value stringPadLeft(VM& vm, int argCount, Value* args) {
+  return padWith(vm, argCount, args, true);
+}
+
+Value stringPadRight(VM& vm, int argCount, Value* args) {
+  return padWith(vm, argCount, args, false);
 }
 
 Value stringRepeat(VM& vm, int, Value* args) {
@@ -730,6 +765,134 @@ Value mapEntries(VM& vm, int, Value* args) {
   return objValue((Obj*)entries);
 }
 
+// ---- sets -----------------------------------------------------------
+
+bool addToSet(VM& vm, ObjSet* set, Value item) {
+  if (!isHashableKey(item)) {
+    vm.failAs("key",
+              "A set can hold strings, numbers, booleans, nil and enum "
+              "members, not %s.",
+              valueTypeName(item));
+    return false;
+  }
+  set->entries.set(item, nilValue());
+  return true;
+}
+
+// set() builds an empty set. set(items) builds one from an array, a set
+// or a string.
+Value nativeSet(VM& vm, int argCount, Value* args) {
+  Runtime& rt = vm.runtime();
+  ObjSet* set = rt.newSet();
+  GCRoot setRoot(rt, (Obj*)set);
+  if (argCount == 0) return objValue((Obj*)set);
+
+  Value source = args[0];
+  if (isArray(source)) {
+    for (Value item : asArray(source)->items) {
+      if (!addToSet(vm, set, item)) return nilValue();
+    }
+  } else if (isSet(source)) {
+    for (const ValueEntry& slot : asSet(source)->entries.slots()) {
+      if (slot.used) set->entries.set(slot.key, nilValue());
+    }
+  } else if (isString(source)) {
+    ObjString* text = asString(source);
+    for (size_t i = 0; i < text->length; i++) {
+      set->entries.set(objValue((Obj*)rt.copyString(text->chars + i, 1)),
+                       nilValue());
+    }
+  } else {
+    return vm.failAs("type",
+                     "set() expects an array, a set or a string, got %s.",
+                     valueTypeName(source));
+  }
+  return objValue((Obj*)set);
+}
+
+Value setAdd(VM& vm, int argCount, Value* args) {
+  ObjSet* set = asSet(args[0]);
+  for (int i = 1; i < argCount; i++) {
+    if (!addToSet(vm, set, args[i])) return nilValue();
+  }
+  return args[0];
+}
+
+Value setRemove(VM&, int, Value* args) {
+  return boolValue(asSet(args[0])->entries.remove(args[1]));
+}
+
+Value setHas(VM&, int, Value* args) {
+  Value ignored;
+  return boolValue(asSet(args[0])->entries.get(args[1], &ignored));
+}
+
+Value setLen(VM&, int, Value* args) {
+  return numberValue((double)asSet(args[0])->entries.count());
+}
+
+Value setClear(VM& vm, int, Value* args) {
+  ObjSet* replacement = vm.runtime().newSet();
+  asSet(args[0])->entries = replacement->entries;
+  return args[0];
+}
+
+Value setItems(VM& vm, int, Value* args) {
+  ObjArray* items = vm.runtime().newArray();
+  GCRoot itemsRoot(vm.runtime(), (Obj*)items);
+  for (const ValueEntry& slot : asSet(args[0])->entries.slots()) {
+    if (slot.used) items->items.push_back(slot.key);
+  }
+  return objValue((Obj*)items);
+}
+
+// The three combining operations all build a new set and leave both
+// operands alone.
+Value setCombine(VM& vm, Value* args, int mode) {
+  if (!isSet(args[1])) {
+    return vm.failAs("type", "Expected a set, got %s.",
+                     valueTypeName(args[1]));
+  }
+  ObjSet* left = asSet(args[0]);
+  ObjSet* right = asSet(args[1]);
+  ObjSet* result = vm.runtime().newSet();
+  GCRoot resultRoot(vm.runtime(), (Obj*)result);
+
+  for (const ValueEntry& slot : left->entries.slots()) {
+    if (!slot.used) continue;
+    Value ignored;
+    bool inRight = right->entries.get(slot.key, &ignored);
+    // 0 union, 1 intersection, 2 difference.
+    if (mode == 0 || (mode == 1 && inRight) || (mode == 2 && !inRight)) {
+      result->entries.set(slot.key, nilValue());
+    }
+  }
+  if (mode == 0) {
+    for (const ValueEntry& slot : right->entries.slots()) {
+      if (slot.used) result->entries.set(slot.key, nilValue());
+    }
+  }
+  return objValue((Obj*)result);
+}
+
+Value setUnion(VM& vm, int, Value* args) { return setCombine(vm, args, 0); }
+Value setIntersect(VM& vm, int, Value* args) { return setCombine(vm, args, 1); }
+Value setDifference(VM& vm, int, Value* args) { return setCombine(vm, args, 2); }
+
+Value setEquals(VM& vm, int, Value* args) {
+  if (!isSet(args[1])) return boolValue(false);
+  ObjSet* left = asSet(args[0]);
+  ObjSet* right = asSet(args[1]);
+  if (left->entries.count() != right->entries.count()) return boolValue(false);
+  for (const ValueEntry& slot : left->entries.slots()) {
+    if (!slot.used) continue;
+    Value ignored;
+    if (!right->entries.get(slot.key, &ignored)) return boolValue(false);
+  }
+  (void)vm;
+  return boolValue(true);
+}
+
 // ---- enum methods ---------------------------------------------------
 
 Value enumValues(VM& vm, int, Value* args) {
@@ -782,6 +945,7 @@ void installCore(Runtime& runtime) {
   defineGlobalFn(runtime, "assert", nativeAssert, -1);
   defineGlobalFn(runtime, "error", nativeError, -1);
   defineGlobalFn(runtime, "chr", nativeChr, 1);
+  defineGlobalFn(runtime, "set", nativeSet, -1);
   defineGlobalFn(runtime, "range", nativeRange, -1);
   defineGlobalFn(runtime, "input", nativeInput, -1);
   defineGlobalFn(runtime, "abs", nativeAbs, 1);
@@ -806,6 +970,8 @@ void installCore(Runtime& runtime) {
   defineMethodFn(runtime, ObjType::String, "sub", stringSub, -1);
   defineMethodFn(runtime, ObjType::String, "replace", stringReplace, 3);
   defineMethodFn(runtime, ObjType::String, "repeat", stringRepeat, 2);
+  defineMethodFn(runtime, ObjType::String, "pad_left", stringPadLeft, -1);
+  defineMethodFn(runtime, ObjType::String, "pad_right", stringPadRight, -1);
 
   defineMethodFn(runtime, ObjType::Array, "len", arrayLen, 1);
   defineMethodFn(runtime, ObjType::Array, "push", arrayPush, -1);
@@ -833,6 +999,17 @@ void installCore(Runtime& runtime) {
   defineMethodFn(runtime, ObjType::Map, "values", mapValues, 1);
   defineMethodFn(runtime, ObjType::Map, "entries", mapEntries, 1);
   defineMethodFn(runtime, ObjType::Map, "equals", valueEquals, 2);
+
+  defineMethodFn(runtime, ObjType::Set, "add", setAdd, -1);
+  defineMethodFn(runtime, ObjType::Set, "remove", setRemove, 2);
+  defineMethodFn(runtime, ObjType::Set, "has", setHas, 2);
+  defineMethodFn(runtime, ObjType::Set, "len", setLen, 1);
+  defineMethodFn(runtime, ObjType::Set, "clear", setClear, 1);
+  defineMethodFn(runtime, ObjType::Set, "items", setItems, 1);
+  defineMethodFn(runtime, ObjType::Set, "union", setUnion, 2);
+  defineMethodFn(runtime, ObjType::Set, "intersect", setIntersect, 2);
+  defineMethodFn(runtime, ObjType::Set, "difference", setDifference, 2);
+  defineMethodFn(runtime, ObjType::Set, "equals", setEquals, 2);
 
   defineMethodFn(runtime, ObjType::Enum, "values", enumValues, 1);
   defineMethodFn(runtime, ObjType::Enum, "from", enumFrom, 2);

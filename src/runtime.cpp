@@ -206,6 +206,8 @@ ObjArray* Runtime::newArray() { return NEW_OBJECT(ObjArray, Array); }
 
 ObjMap* Runtime::newMap() { return NEW_OBJECT(ObjMap, Map); }
 
+ObjSet* Runtime::newSet() { return NEW_OBJECT(ObjSet, Set); }
+
 ObjModule* Runtime::newModule(ObjString* name, ObjString* path) {
   pushRoot((Obj*)name);
   pushRoot((Obj*)path);
@@ -426,6 +428,12 @@ void Runtime::blackenObject(Obj* obj) {
       }
       break;
     }
+    case ObjType::Set: {
+      for (const ValueEntry& slot : ((ObjSet*)obj)->entries.slots()) {
+        if (slot.used) markValue(slot.key);
+      }
+      break;
+    }
     case ObjType::Module: {
       ObjModule* module = (ObjModule*)obj;
       markObject((Obj*)module->name);
@@ -524,6 +532,10 @@ void Runtime::freeObject(Obj* obj) {
     case ObjType::Map:
       bytesAllocated -= sizeof(ObjMap);
       delete (ObjMap*)obj;
+      break;
+    case ObjType::Set:
+      bytesAllocated -= sizeof(ObjSet);
+      delete (ObjSet*)obj;
       break;
     case ObjType::Module:
       bytesAllocated -= sizeof(ObjModule);

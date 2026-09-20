@@ -33,6 +33,7 @@ enum class ObjType : uint8_t {
   BoundMethod,
   Array,
   Map,
+  Set,
   Module,
   Enum,
   EnumMember,
@@ -165,6 +166,13 @@ struct ObjMap {
   ValueMap entries;
 };
 
+// A set of distinct values. It reuses the map table with the values
+// ignored, so membership follows exactly the same rules as map keys.
+struct ObjSet {
+  Obj obj;
+  ValueMap entries;
+};
+
 // A channel is a bounded queue guarded by the runtime lock. Waiting uses a
 // condition variable over that same lock, so a blocked task releases the
 // lock and lets other tasks and the collector run. docs/design.md covers
@@ -258,6 +266,7 @@ inline ObjInstance* asInstance(Value v) { return (ObjInstance*)asObj(v); }
 inline ObjBoundMethod* asBoundMethod(Value v) { return (ObjBoundMethod*)asObj(v); }
 inline ObjArray* asArray(Value v) { return (ObjArray*)asObj(v); }
 inline ObjMap* asMap(Value v) { return (ObjMap*)asObj(v); }
+inline ObjSet* asSet(Value v) { return (ObjSet*)asObj(v); }
 inline ObjModule* asModule(Value v) { return (ObjModule*)asObj(v); }
 inline ObjChannel* asChannel(Value v) { return (ObjChannel*)asObj(v); }
 inline ObjTask* asTask(Value v) { return (ObjTask*)asObj(v); }
@@ -276,6 +285,7 @@ inline bool isClass(Value v) { return isObjType(v, ObjType::Class); }
 inline bool isInstance(Value v) { return isObjType(v, ObjType::Instance); }
 inline bool isArray(Value v) { return isObjType(v, ObjType::Array); }
 inline bool isMap(Value v) { return isObjType(v, ObjType::Map); }
+inline bool isSet(Value v) { return isObjType(v, ObjType::Set); }
 inline bool isChannel(Value v) { return isObjType(v, ObjType::Channel); }
 inline bool isTask(Value v) { return isObjType(v, ObjType::Task); }
 inline bool isFile(Value v) { return isObjType(v, ObjType::File); }

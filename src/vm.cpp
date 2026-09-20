@@ -16,17 +16,6 @@ namespace {
 // "1 argument" rather than "1 arguments".
 const char* plural(int count) { return count == 1 ? "" : "s"; }
 
-// Bitwise operators work on 32 bit integers. A Red number is a double, so
-// it is truncated and wrapped into that range first, the same way
-// JavaScript does it.
-int32_t toInt32(double value) {
-  if (!std::isfinite(value)) return 0;
-  double truncated = std::trunc(value);
-  double wrapped = std::fmod(truncated, 4294967296.0);
-  if (wrapped < 0) wrapped += 4294967296.0;
-  return (int32_t)(uint32_t)wrapped;
-}
-
 // Entry point for a spawned task. Runs on its own thread with its own VM
 // and its own value stack, sharing the heap with everyone else.
 void taskMain(Runtime* runtime, ObjTask* task) {
@@ -1225,6 +1214,16 @@ InterpretResult VM::run(int baseFrame) {
           }
           pop();
           push(objValue((Obj*)keys));
+          break;
+        }
+        if (isSet(subject)) {
+          ObjArray* items = runtime_.newArray();
+          GCRoot itemsRoot(runtime_, (Obj*)items);
+          for (const ValueEntry& slot : asSet(subject)->entries.slots()) {
+            if (slot.used) items->items.push_back(slot.key);
+          }
+          pop();
+          push(objValue((Obj*)items));
           break;
         }
         if (isString(subject)) {

@@ -103,6 +103,21 @@ std::string objectString(Obj* obj, bool quoteStrings, int depth) {
       }
       return out + "}";
     }
+    case ObjType::Set: {
+      if (depth >= kMaxPrintDepth) return "set(...)";
+      ObjSet* set = (ObjSet*)obj;
+      // Printed as a call rather than in braces, so that it can never be
+      // mistaken for a map.
+      std::string out = "set(";
+      bool first = true;
+      for (const ValueEntry& slot : set->entries.slots()) {
+        if (!slot.used || slot.tombstone) continue;
+        if (!first) out += ", ";
+        first = false;
+        out += stringify(slot.key, true, depth + 1);
+      }
+      return out + ")";
+    }
     case ObjType::Module: {
       ObjModule* m = (ObjModule*)obj;
       return "<module " + std::string(m->name->chars, m->name->length) + ">";
@@ -156,6 +171,14 @@ std::string stringify(Value v, bool quoteStrings, int depth) {
 }
 
 }  // namespace
+
+int32_t toInt32(double value) {
+  if (!std::isfinite(value)) return 0;
+  double truncated = std::trunc(value);
+  double wrapped = std::fmod(truncated, 4294967296.0);
+  if (wrapped < 0) wrapped += 4294967296.0;
+  return (int32_t)(uint32_t)wrapped;
+}
 
 bool valuesEqual(Value a, Value b) {
   if (a.type != b.type) return false;
@@ -224,6 +247,7 @@ const char* objectTypeName(Obj* obj) {
     case ObjType::Instance: return "instance";
     case ObjType::Array: return "array";
     case ObjType::Map: return "map";
+    case ObjType::Set: return "set";
     case ObjType::Module: return "module";
     case ObjType::Enum: return "enum";
     case ObjType::EnumMember: return "enum member";

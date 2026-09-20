@@ -48,6 +48,7 @@ class Runtime {
   ObjBoundMethod* newBoundMethod(Value receiver, Value method);
   ObjArray* newArray();
   ObjMap* newMap();
+  ObjSet* newSet();
   ObjModule* newModule(ObjString* name, ObjString* path);
   ObjEnum* newEnum(ObjString* name);
   ObjEnumMember* newEnumMember(ObjEnum* parent, ObjString* name, double value);
