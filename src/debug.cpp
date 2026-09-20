@@ -136,6 +136,30 @@ size_t disassembleInstruction(const Chunk& chunk, size_t offset) {
     case OP_THROW: return simpleInstruction("THROW", offset);
     case OP_SPAWN: return byteInstruction("SPAWN", chunk, offset);
     case OP_IMPORT: return constantInstruction("IMPORT", chunk, offset);
+    case OP_DUP: return simpleInstruction("DUP", offset);
+    case OP_DUP2: return simpleInstruction("DUP2", offset);
+    case OP_BIT_AND: return simpleInstruction("BIT_AND", offset);
+    case OP_BIT_OR: return simpleInstruction("BIT_OR", offset);
+    case OP_BIT_XOR: return simpleInstruction("BIT_XOR", offset);
+    case OP_BIT_NOT: return simpleInstruction("BIT_NOT", offset);
+    case OP_SHIFT_LEFT: return simpleInstruction("SHIFT_LEFT", offset);
+    case OP_SHIFT_RIGHT: return simpleInstruction("SHIFT_RIGHT", offset);
+    case OP_ITER_PREP: return simpleInstruction("ITER_PREP", offset);
+    case OP_ITER_NEXT: {
+      uint8_t sequence = chunk.code[offset + 1];
+      uint8_t index = chunk.code[offset + 2];
+      uint16_t jump = readShort(chunk, offset + 3);
+      std::printf("%-18s seq %d idx %d -> %zu\n", "ITER_NEXT", sequence, index,
+                  offset + 5 + (size_t)jump);
+      return offset + 5;
+    }
+    case OP_JUMP_IF_ARG: {
+      uint8_t index = chunk.code[offset + 1];
+      uint16_t jump = readShort(chunk, offset + 2);
+      std::printf("%-18s arg %d -> %zu\n", "JUMP_IF_ARG", index,
+                  offset + 4 + (size_t)jump);
+      return offset + 4;
+    }
     default:
       std::printf("Unknown opcode %d\n", instruction);
       return offset + 1;

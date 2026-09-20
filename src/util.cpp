@@ -1,10 +1,17 @@
 #include "util.h"
 
+#include <sys/stat.h>
+
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
 
 namespace red {
+
+bool fileExists(const std::string& path) {
+  struct stat info;
+  return ::stat(path.c_str(), &info) == 0;
+}
 
 bool readFile(const std::string& path, std::string* out) {
   FILE* file = std::fopen(path.c_str(), "rb");

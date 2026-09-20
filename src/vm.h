@@ -18,6 +18,10 @@ struct CallFrame {
   ObjClosure* closure;
   uint8_t* ip;
   Value* slots;
+  // How many arguments the call site actually supplied, before any
+  // padding. The prologue uses it to decide whether a parameter needs its
+  // default value.
+  int argCount;
 };
 
 // One entry per active try block. The VM keeps these in a flat stack so

@@ -27,6 +27,13 @@ enum class TokenType {
   Import, Let, Nil, Or, Return, Spawn, Super, This, Throw, True, Try, While,
   As,
 
+  // Added after the first release. New members go here, immediately
+  // before Error, so that the parse rule table in compiler.cpp keeps its
+  // existing indexes.
+  Ampersand, Pipe, Caret, Tilde, LessLess, GreaterGreater,
+  PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual,
+  In, Switch, Case, Default, Ellipsis,
+
   Error, Eof,
 };
 

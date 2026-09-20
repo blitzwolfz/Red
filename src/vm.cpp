@@ -13,6 +13,20 @@ namespace red {
 
 namespace {
 
+// "1 argument" rather than "1 arguments".
+const char* plural(int count) { return count == 1 ? "" : "s"; }
+
+// Bitwise operators work on 32 bit integers. A Red number is a double, so
+// it is truncated and wrapped into that range first, the same way
+// JavaScript does it.
+int32_t toInt32(double value) {
+  if (!std::isfinite(value)) return 0;
+  double truncated = std::trunc(value);
+  double wrapped = std::fmod(truncated, 4294967296.0);
+  if (wrapped < 0) wrapped += 4294967296.0;
+  return (int32_t)(uint32_t)wrapped;
+}
+
 // Entry point for a spawned task. Runs on its own thread with its own VM
 // and its own value stack, sharing the heap with everyone else.
 void taskMain(Runtime* runtime, ObjTask* task) {
@@ -168,9 +182,23 @@ bool VM::raise(Value value) {
 // calling
 
 bool VM::call(ObjClosure* closure, int argCount) {
-  if (argCount != closure->function->arity) {
-    return runtimeError("Expected %d arguments but got %d.",
-                        closure->function->arity, argCount);
+  ObjFunction* function = closure->function;
+  // Remembered before any padding, so the prologue can tell which
+  // parameters the call actually supplied.
+  int supplied = argCount;
+
+  if (argCount < function->arity ||
+      (!function->hasRest && argCount > function->maxArity)) {
+    if (function->hasRest) {
+      return runtimeError("Expected at least %d argument%s but got %d.",
+                          function->arity, plural(function->arity), argCount);
+    }
+    if (function->arity == function->maxArity) {
+      return runtimeError("Expected %d argument%s but got %d.", function->arity,
+                          plural(function->arity), argCount);
+    }
+    return runtimeError("Expected between %d and %d arguments but got %d.",
+                        function->arity, function->maxArity, argCount);
   }
   if (frameCount_ == kMaxFrames) {
     return runtimeError("Stack overflow: call depth exceeded %d frames.",
@@ -187,10 +215,30 @@ bool VM::call(ObjClosure* closure, int argCount) {
         closure->function->slotCount,
         (long)(stack_ + kMaxStack - stackTop_));
   }
+  // Parameters the call left out get a nil, which the prologue replaces
+  // with the declared default.
+  while (argCount < function->maxArity) {
+    push(nilValue());
+    argCount++;
+  }
+
+  if (function->hasRest) {
+    // Everything past the declared parameters moves into one array, which
+    // then occupies the rest parameter's slot.
+    int extra = argCount - function->maxArity;
+    ObjArray* rest = runtime_.newArray();
+    GCRoot restRoot(runtime_, (Obj*)rest);
+    rest->items.assign(stackTop_ - extra, stackTop_);
+    stackTop_ -= extra;
+    push(objValue((Obj*)rest));
+    argCount = function->maxArity + 1;
+  }
+
   CallFrame* frame = &frames_[frameCount_++];
   frame->closure = closure;
-  frame->ip = closure->function->chunk.code.data();
+  frame->ip = function->chunk.code.data();
   frame->slots = stackTop_ - argCount - 1;
+  frame->argCount = supplied;
   return true;
 }
 
@@ -222,8 +270,9 @@ bool VM::callValue(Value callee, int argCount) {
       case ObjType::Native: {
         ObjNative* native = asNative(callee);
         if (native->arity >= 0 && native->arity != argCount) {
-          return runtimeError("%s() expected %d arguments but got %d.",
-                              native->name->chars, native->arity, argCount);
+          return runtimeError("%s() expected %d argument%s but got %d.",
+                              native->name->chars, native->arity,
+                              plural(native->arity), argCount);
         }
         Value result =
             native->foreign != nullptr
@@ -307,8 +356,9 @@ bool VM::invoke(ObjString* name, int argCount) {
   ObjNative* method = lookupBuiltinMethod(runtime_, receiver, name);
   if (method != nullptr) {
     if (method->arity >= 0 && method->arity != argCount + 1) {
-      return runtimeError("%s() expected %d arguments but got %d.",
-                          method->name->chars, method->arity - 1, argCount);
+      return runtimeError("%s() expected %d argument%s but got %d.",
+                          method->name->chars, method->arity - 1,
+                          plural(method->arity - 1), argCount);
     }
     Value result =
         method->foreign != nullptr
@@ -503,8 +553,32 @@ bool VM::importModule(ObjString* path) {
   // directory, so a module can be moved without editing its imports.
   std::string base = directoryOf(std::string(currentModule()->path->chars,
                                              currentModule()->path->length));
-  std::string resolved =
-      absolutePath(joinPath(base, std::string(path->chars, path->length)));
+  std::string request(path->chars, path->length);
+  std::string resolved = absolutePath(joinPath(base, request));
+
+  // A path that is not next to the importing file is looked for on the
+  // search path, so a shared library of Red code does not have to be
+  // reached with a chain of "..".
+  if (!fileExists(resolved) && request.front() != '/') {
+    const char* searchPath = std::getenv("RED_PATH");
+    if (searchPath != nullptr) {
+      std::string entries(searchPath);
+      size_t start = 0;
+      while (start <= entries.size()) {
+        size_t end = entries.find(':', start);
+        if (end == std::string::npos) end = entries.size();
+        std::string directory = entries.substr(start, end - start);
+        if (!directory.empty()) {
+          std::string candidate = absolutePath(joinPath(directory, request));
+          if (fileExists(candidate)) {
+            resolved = candidate;
+            break;
+          }
+        }
+        start = end + 1;
+      }
+    }
+  }
   ObjString* key = runtime_.internString(resolved);
   // Rooted for the whole function: the interner is weak, and everything
   // below allocates.
@@ -614,6 +688,16 @@ InterpretResult VM::run(int baseFrame) {
       case OP_TRUE: push(boolValue(true)); break;
       case OP_FALSE: push(boolValue(false)); break;
       case OP_POP: pop(); break;
+      case OP_DUP: push(peek(0)); break;
+      case OP_DUP2: {
+        // Used by compound assignment to a subscript, which needs both
+        // the target and the index twice.
+        Value first = peek(1);
+        Value second = peek(0);
+        push(first);
+        push(second);
+        break;
+      }
 
       case OP_GET_LOCAL: push(frame->slots[READ_BYTE()]); break;
       case OP_SET_LOCAL: frame->slots[READ_BYTE()] = peek(0); break;
@@ -816,6 +900,41 @@ InterpretResult VM::run(int baseFrame) {
       }
       case OP_NOT: push(boolValue(isFalsey(pop()))); break;
 
+      case OP_BIT_AND:
+      case OP_BIT_OR:
+      case OP_BIT_XOR:
+      case OP_SHIFT_LEFT:
+      case OP_SHIFT_RIGHT: {
+        if (!isNumber(peek(0)) || !isNumber(peek(1))) {
+          FAULT("Bitwise operators need two numbers, got %s and %s.",
+                valueTypeName(peek(1)), valueTypeName(peek(0)))
+        }
+        int32_t right = toInt32(asNumber(pop()));
+        int32_t left = toInt32(asNumber(pop()));
+        int32_t result;
+        switch (instruction) {
+          case OP_BIT_AND: result = left & right; break;
+          case OP_BIT_OR: result = left | right; break;
+          case OP_BIT_XOR: result = left ^ right; break;
+          // The shift count is masked, so shifting by 32 or more is
+          // defined rather than left to the host.
+          case OP_SHIFT_LEFT:
+            result = (int32_t)((uint32_t)left << (right & 31));
+            break;
+          default: result = left >> (right & 31); break;
+        }
+        push(numberValue((double)result));
+        break;
+      }
+      case OP_BIT_NOT: {
+        if (!isNumber(peek(0))) {
+          FAULT("Cannot apply '~' to a value of type %s.",
+                valueTypeName(peek(0)))
+        }
+        push(numberValue((double)~toInt32(asNumber(pop()))));
+        break;
+      }
+
       case OP_TO_STRING: {
         ObjString* text = runtime_.internString(valueToString(peek(0)));
         pop();
@@ -978,6 +1097,60 @@ InterpretResult VM::run(int baseFrame) {
       case OP_IMPORT: {
         ObjString* path = READ_STRING();
         CHECK(importModule(path))
+        break;
+      }
+
+      case OP_ITER_PREP: {
+        Value subject = peek(0);
+        if (isArray(subject)) break;
+        if (isMap(subject)) {
+          // A snapshot of the keys, so changing the map while walking it
+          // cannot disturb the walk.
+          ObjArray* keys = runtime_.newArray();
+          GCRoot keysRoot(runtime_, (Obj*)keys);
+          for (const ValueEntry& slot : asMap(subject)->entries.slots()) {
+            if (slot.used) keys->items.push_back(slot.key);
+          }
+          pop();
+          push(objValue((Obj*)keys));
+          break;
+        }
+        if (isString(subject)) {
+          ObjString* text = asString(subject);
+          ObjArray* characters = runtime_.newArray();
+          GCRoot charactersRoot(runtime_, (Obj*)characters);
+          for (size_t i = 0; i < text->length; i++) {
+            characters->items.push_back(
+                objValue((Obj*)runtime_.copyString(text->chars + i, 1)));
+          }
+          pop();
+          push(objValue((Obj*)characters));
+          break;
+        }
+        FAULT("Cannot walk a value of type %s.", valueTypeName(subject))
+      }
+
+      case OP_ITER_NEXT: {
+        uint8_t sequenceSlot = READ_BYTE();
+        uint8_t indexSlot = READ_BYTE();
+        uint16_t offset = READ_SHORT();
+        ObjArray* sequence = asArray(frame->slots[sequenceSlot]);
+        size_t index = (size_t)asNumber(frame->slots[indexSlot]);
+        // The length is read every time, so a loop over an array that
+        // shrinks underneath it stops rather than reading past the end.
+        if (index >= sequence->items.size()) {
+          frame->ip += offset;
+          break;
+        }
+        push(sequence->items[index]);
+        frame->slots[indexSlot] = numberValue((double)(index + 1));
+        break;
+      }
+
+      case OP_JUMP_IF_ARG: {
+        uint8_t index = READ_BYTE();
+        uint16_t offset = READ_SHORT();
+        if ((int)index < frame->argCount) frame->ip += offset;
         break;
       }
 

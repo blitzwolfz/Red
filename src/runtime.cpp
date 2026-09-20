@@ -112,6 +112,8 @@ ObjString* Runtime::internString(const std::string& text) {
 ObjFunction* Runtime::newFunction(ObjModule* module) {
   ObjFunction* fn = NEW_OBJECT(ObjFunction, Function);
   fn->arity = 0;
+  fn->maxArity = 0;
+  fn->hasRest = false;
   fn->upvalueCount = 0;
   fn->slotCount = 0;
   fn->name = nullptr;

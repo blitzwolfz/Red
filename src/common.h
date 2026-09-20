@@ -12,11 +12,13 @@ namespace red {
 
 // Bumped whenever the bytecode layout changes in a way that breaks
 // previously written chunks. docs/bytecode.md tracks the history.
-constexpr int kBytecodeVersion = 1;
+constexpr int kBytecodeVersion = 2;
 
 // Maximum call depth before the VM reports a stack overflow instead of
-// smashing the host stack.
-constexpr int kMaxFrames = 256;
+// smashing the host stack. A recursive descent parser written in Red
+// needs more than a few hundred, and the frame table costs 32 bytes an
+// entry, so this is set well above what ordinary code uses.
+constexpr int kMaxFrames = 1024;
 
 // Size of one task's value stack, in slots. Each task allocates its own,
 // so this is a per-thread cost: 64K slots is one megabyte per task.

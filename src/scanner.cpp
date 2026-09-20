@@ -16,6 +16,8 @@ bool isAlpha(char c) {
 const std::unordered_map<std::string, TokenType>& keywords() {
   static const std::unordered_map<std::string, TokenType> table = {
       {"and", TokenType::And},       {"as", TokenType::As},
+      {"case", TokenType::Case},     {"default", TokenType::Default},
+      {"in", TokenType::In},         {"switch", TokenType::Switch},
       {"break", TokenType::Break},   {"catch", TokenType::Catch},
       {"class", TokenType::Class},   {"const", TokenType::Const},
       {"continue", TokenType::Continue}, {"else", TokenType::Else},
@@ -215,17 +217,34 @@ Token Scanner::scan() {
       return make(TokenType::RightBrace);
     case ';': return make(TokenType::Semicolon);
     case ',': return make(TokenType::Comma);
-    case '.': return make(TokenType::Dot);
+    case '.':
+      // "..." marks a rest parameter. A single dot is property access.
+      if (peek() == '.' && peekNext() == '.') {
+        advance();
+        advance();
+        return make(TokenType::Ellipsis);
+      }
+      return make(TokenType::Dot);
     case ':': return make(TokenType::Colon);
-    case '%': return make(TokenType::Percent);
-    case '-': return make(match('>') ? TokenType::Arrow : TokenType::Minus);
-    case '+': return make(TokenType::Plus);
-    case '/': return make(TokenType::Slash);
-    case '*': return make(TokenType::Star);
+    case '%':
+      return make(match('=') ? TokenType::PercentEqual : TokenType::Percent);
+    case '-':
+      if (match('>')) return make(TokenType::Arrow);
+      return make(match('=') ? TokenType::MinusEqual : TokenType::Minus);
+    case '+': return make(match('=') ? TokenType::PlusEqual : TokenType::Plus);
+    case '/': return make(match('=') ? TokenType::SlashEqual : TokenType::Slash);
+    case '*': return make(match('=') ? TokenType::StarEqual : TokenType::Star);
+    case '&': return make(TokenType::Ampersand);
+    case '|': return make(TokenType::Pipe);
+    case '^': return make(TokenType::Caret);
+    case '~': return make(TokenType::Tilde);
     case '!': return make(match('=') ? TokenType::BangEqual : TokenType::Bang);
     case '=': return make(match('=') ? TokenType::EqualEqual : TokenType::Equal);
-    case '<': return make(match('=') ? TokenType::LessEqual : TokenType::Less);
+    case '<':
+      if (match('<')) return make(TokenType::LessLess);
+      return make(match('=') ? TokenType::LessEqual : TokenType::Less);
     case '>':
+      if (match('>')) return make(TokenType::GreaterGreater);
       return make(match('=') ? TokenType::GreaterEqual : TokenType::Greater);
     case '"': return string();
     default: break;

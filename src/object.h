@@ -73,7 +73,14 @@ struct ObjModule {
 
 struct ObjFunction {
   Obj obj;
+  // Parameters that must be supplied.
   int arity;
+  // Parameters declared, including those with defaults. A call pads the
+  // missing ones with nil and lets the prologue fill them in.
+  int maxArity;
+  // True when the last parameter was written with "...", which gathers
+  // any further arguments into an array.
+  bool hasRest;
   int upvalueCount;
   // Upper bound on the value stack slots this function can use: its
   // locals plus the temporaries its expressions can hold. A call checks

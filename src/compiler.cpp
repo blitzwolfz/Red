@@ -18,6 +18,10 @@ enum class Precedence {
   And,         // and
   Equality,    // == !=
   Comparison,  // < > <= >=
+  BitOr,       // |
+  BitXor,      // ^
+  BitAnd,      // &
+  Shift,       // << >>
   Term,        // + -
   Factor,      // * / %
   Unary,       // ! -
@@ -171,6 +175,9 @@ class Compiler {
   void addLocal(const std::string& name, bool isConst);
   void declareVariable(bool isConst);
   int parseVariable(const char* message, bool isConst);
+  // The part of parseVariable that runs once the name has been consumed.
+  // for-in needs to read the name first to see whether "in" follows.
+  int declareParsedVariable(const std::string& name, bool isConst);
   void markInitialized();
   void defineVariable(int global, bool isConst);
   int resolveLocal(FunctionState* state, const std::string& name);
@@ -194,6 +201,9 @@ class Compiler {
   void ifStatement();
   void whileStatement();
   void forStatement();
+  void forInStatement(const std::string& name);
+  void switchStatement();
+  void caseBody();
   void returnStatement();
   void breakStatement();
   void continueStatement();
@@ -209,6 +219,9 @@ class Compiler {
   void expression();
   void parsePrecedence(Precedence precedence);
   uint8_t argumentList();
+  // Matches a compound assignment operator such as "+=" and reports the
+  // arithmetic opcode that goes with it.
+  bool matchCompound(uint8_t* op);
 
   void grouping(bool canAssign);
   void number(bool canAssign);
@@ -289,6 +302,7 @@ void Compiler::synchronize() {
       case TokenType::For:
       case TokenType::If:
       case TokenType::While:
+      case TokenType::Switch:
       case TokenType::Return:
       case TokenType::Try:
       case TokenType::Throw:
@@ -410,10 +424,14 @@ void Compiler::declareVariable(bool isConst) {
 
 int Compiler::parseVariable(const char* message, bool isConst) {
   consume(TokenType::Identifier, message);
+  return declareParsedVariable(previous_.lexeme, isConst);
+}
+
+int Compiler::declareParsedVariable(const std::string& name, bool isConst) {
   declareVariable(isConst);
   if (state_->scopeDepth > 0) return 0;
-  if (isConst) constGlobals_.insert(previous_.lexeme);
-  return identifierConstant(previous_.lexeme);
+  if (isConst) constGlobals_.insert(name);
+  return identifierConstant(name);
 }
 
 void Compiler::markInitialized() {
@@ -492,11 +510,22 @@ void Compiler::namedVariable(std::string name, bool canAssign) {
     setOp = OP_SET_GLOBAL;
   }
 
-  if (canAssign && match(TokenType::Equal)) {
-    if (isConstLocal || (getOp == OP_GET_GLOBAL &&
-                         constGlobals_.count(name) > 0)) {
-      error("Cannot assign to a const binding.");
-    }
+  bool isConstBinding =
+      isConstLocal ||
+      (getOp == OP_GET_GLOBAL && constGlobals_.count(name) > 0);
+
+  uint8_t compound;
+  if (canAssign && matchCompound(&compound)) {
+    if (isConstBinding) error("Cannot assign to a const binding.");
+    // Read the current value, combine it, and write it back.
+    emitByte(getOp);
+    if (getOp == OP_GET_GLOBAL) emitShort(arg); else emitByte((uint8_t)arg);
+    expression();
+    emitByte(compound);
+    emitByte(setOp);
+    if (setOp == OP_SET_GLOBAL) emitShort(arg); else emitByte((uint8_t)arg);
+  } else if (canAssign && match(TokenType::Equal)) {
+    if (isConstBinding) error("Cannot assign to a const binding.");
     expression();
     emitByte(setOp);
     if (setOp == OP_SET_GLOBAL) {
@@ -681,16 +710,49 @@ void Compiler::function(FunctionKind kind, const std::string& name) {
   beginScope();
 
   consume(TokenType::LeftParen, "Expect '(' after a function name.");
+  bool seenOptional = false;
   if (!check(TokenType::RightParen)) {
     do {
-      state_->function->arity++;
-      if (state_->function->arity > 255) {
+      if (match(TokenType::Ellipsis)) {
+        // A rest parameter gathers whatever is left, so nothing can
+        // follow it.
+        int restConstant = parseVariable("Expect a name after '...'.", false);
+        state_->function->paramTypes.push_back("");
+        defineVariable(restConstant, false);
+        state_->function->hasRest = true;
+        break;
+      }
+
+      state_->function->maxArity++;
+      if (state_->function->maxArity > 255) {
         errorAtCurrent("Cannot have more than 255 parameters.");
       }
       int constant = parseVariable("Expect a parameter name.", false);
       std::string annotation = typeAnnotation();
       state_->function->paramTypes.push_back(annotation);
       defineVariable(constant, false);
+
+      if (match(TokenType::Equal)) {
+        seenOptional = true;
+        // The default is compiled here, which puts it at the top of the
+        // body, and it is skipped when the call supplied this argument.
+        // Parameters declared earlier are already in scope, so a default
+        // can refer to them.
+        int index = state_->function->maxArity - 1;
+        emitByte(OP_JUMP_IF_ARG);
+        emitByte((uint8_t)index);
+        emitShort(0xffff);
+        int suppliedJump = (int)chunk().code.size() - 2;
+        expression();
+        emitByte(OP_SET_LOCAL);
+        emitByte((uint8_t)(index + 1));
+        emitByte(OP_POP);
+        patchJump(suppliedJump);
+      } else if (seenOptional) {
+        error("A required parameter cannot follow one with a default.");
+      } else {
+        state_->function->arity++;
+      }
     } while (match(TokenType::Comma));
   }
   consume(TokenType::RightParen, "Expect ')' after parameters.");
@@ -727,6 +789,8 @@ void Compiler::statement() {
     whileStatement();
   } else if (match(TokenType::For)) {
     forStatement();
+  } else if (match(TokenType::Switch)) {
+    switchStatement();
   } else if (match(TokenType::Return)) {
     returnStatement();
   } else if (match(TokenType::Break)) {
@@ -802,7 +866,24 @@ void Compiler::forStatement() {
   if (match(TokenType::Semicolon)) {
     // No initializer.
   } else if (match(TokenType::Let)) {
-    varDeclaration(false);
+    // The name has to be read before it is clear which kind of loop this
+    // is, because "in" only shows up after it.
+    consume(TokenType::Identifier, "Expect a variable name.");
+    std::string name = previous_.lexeme;
+    if (match(TokenType::In)) {
+      forInStatement(name);
+      endScope();
+      return;
+    }
+    int global = declareParsedVariable(name, false);
+    typeAnnotation();
+    if (match(TokenType::Equal)) {
+      expression();
+    } else {
+      emitByte(OP_NIL);
+    }
+    consume(TokenType::Semicolon, "Expect ';' after a variable declaration.");
+    defineVariable(global, false);
   } else {
     expressionStatement();
   }
@@ -852,6 +933,115 @@ void Compiler::closeLoopHandlers() {
   for (int i = state_->tryDepth; i > state_->loops.back().tryDepth; i--) {
     emitByte(OP_TRY_END);
   }
+}
+
+// for (let x in subject) walks an array, a map's keys, or a string's
+// characters. Two hidden locals hold the sequence and the position.
+void Compiler::forInStatement(const std::string& name) {
+  expression();
+  consume(TokenType::RightParen, "Expect ')' after a for-in subject.");
+  emitByte(OP_ITER_PREP);
+
+  // The hidden names contain a space, so no program can reach them.
+  addLocal("  seq", true);
+  markInitialized();
+  int seqSlot = (int)state_->locals.size() - 1;
+
+  emitConstant(numberValue(0));
+  addLocal("  idx", true);
+  markInitialized();
+  int idxSlot = (int)state_->locals.size() - 1;
+
+  int loopStart = (int)chunk().code.size();
+  emitByte(OP_ITER_NEXT);
+  emitByte((uint8_t)seqSlot);
+  emitByte((uint8_t)idxSlot);
+  emitShort(0xffff);
+  int exitJump = (int)chunk().code.size() - 2;
+
+  state_->loops.push_back(
+      {loopStart, state_->scopeDepth, state_->tryDepth, {}});
+
+  // ITER_NEXT leaves the element on top of the stack, which is exactly
+  // the slot the loop variable occupies.
+  beginScope();
+  addLocal(name, false);
+  markInitialized();
+  statement();
+  endScope();
+
+  emitLoop(loopStart);
+  patchJump(exitJump);
+  for (int jump : state_->loops.back().breakJumps) patchJump(jump);
+  state_->loops.pop_back();
+}
+
+// Statements belonging to one case, up to the next case or the closing
+// brace. There is no fall through, so no break is needed to end a case.
+void Compiler::caseBody() {
+  beginScope();
+  while (!check(TokenType::Case) && !check(TokenType::Default) &&
+         !check(TokenType::RightBrace) && !check(TokenType::Eof)) {
+    declaration();
+  }
+  endScope();
+}
+
+void Compiler::switchStatement() {
+  consume(TokenType::LeftParen, "Expect '(' after 'switch'.");
+  expression();
+  consume(TokenType::RightParen, "Expect ')' after a switch value.");
+  consume(TokenType::LeftBrace, "Expect '{' before switch cases.");
+
+  beginScope();
+  // The subject is kept in a hidden local so that each case can compare
+  // against it without evaluating it again.
+  addLocal("  switch", true);
+  markInitialized();
+  int valueSlot = (int)state_->locals.size() - 1;
+
+  std::vector<int> endJumps;
+  bool sawDefault = false;
+
+  while (!check(TokenType::RightBrace) && !check(TokenType::Eof)) {
+    if (match(TokenType::Case)) {
+      if (sawDefault) error("A case cannot come after the default clause.");
+
+      std::vector<int> matchJumps;
+      do {
+        emitByte(OP_GET_LOCAL);
+        emitByte((uint8_t)valueSlot);
+        expression();
+        emitByte(OP_EQUAL);
+        matchJumps.push_back(emitJump(OP_JUMP_IF_TRUE));
+        // This test failed, so drop its result and try the next value.
+        emitByte(OP_POP);
+      } while (match(TokenType::Comma));
+      consume(TokenType::Colon, "Expect ':' after case values.");
+
+      // Every value failed, so skip the body.
+      int skipJump = emitJump(OP_JUMP);
+      for (int jump : matchJumps) patchJump(jump);
+      // Exactly one test left a true behind. Drop it.
+      emitByte(OP_POP);
+      caseBody();
+      endJumps.push_back(emitJump(OP_JUMP));
+      patchJump(skipJump);
+    } else if (match(TokenType::Default)) {
+      if (sawDefault) error("A switch can only have one default clause.");
+      sawDefault = true;
+      consume(TokenType::Colon, "Expect ':' after 'default'.");
+      caseBody();
+      endJumps.push_back(emitJump(OP_JUMP));
+    } else {
+      errorAtCurrent("Expect 'case' or 'default' in a switch body.");
+      break;
+    }
+  }
+
+  consume(TokenType::RightBrace, "Expect '}' after switch cases.");
+  for (int jump : endJumps) patchJump(jump);
+  endScope();
 }
 
 void Compiler::popLoopLocals(int targetDepth) {
@@ -989,6 +1179,15 @@ uint8_t Compiler::argumentList() {
   return count;
 }
 
+bool Compiler::matchCompound(uint8_t* op) {
+  if (match(TokenType::PlusEqual)) { *op = OP_ADD; return true; }
+  if (match(TokenType::MinusEqual)) { *op = OP_SUBTRACT; return true; }
+  if (match(TokenType::StarEqual)) { *op = OP_MULTIPLY; return true; }
+  if (match(TokenType::SlashEqual)) { *op = OP_DIVIDE; return true; }
+  if (match(TokenType::PercentEqual)) { *op = OP_MODULO; return true; }
+  return false;
+}
+
 void Compiler::grouping(bool) {
   AllowCalls allowCalls(*this);
   expression();
@@ -1045,6 +1244,7 @@ void Compiler::unary(bool) {
   switch (op) {
     case TokenType::Bang: emitByte(OP_NOT); break;
     case TokenType::Minus: emitByte(OP_NEGATE); break;
+    case TokenType::Tilde: emitByte(OP_BIT_NOT); break;
     default: break;
   }
 }
@@ -1066,6 +1266,11 @@ void Compiler::binary(bool) {
     case TokenType::Star: emitByte(OP_MULTIPLY); break;
     case TokenType::Slash: emitByte(OP_DIVIDE); break;
     case TokenType::Percent: emitByte(OP_MODULO); break;
+    case TokenType::Ampersand: emitByte(OP_BIT_AND); break;
+    case TokenType::Pipe: emitByte(OP_BIT_OR); break;
+    case TokenType::Caret: emitByte(OP_BIT_XOR); break;
+    case TokenType::LessLess: emitByte(OP_SHIFT_LEFT); break;
+    case TokenType::GreaterGreater: emitByte(OP_SHIFT_RIGHT); break;
     default: break;
   }
 }
@@ -1079,8 +1284,19 @@ void Compiler::dot(bool canAssign) {
   consume(TokenType::Identifier, "Expect a property name after '.'.");
   int name = identifierConstant(previous_.lexeme);
 
+  uint8_t compound;
   if (canAssign && match(TokenType::Equal)) {
     expression();
+    emitByte(OP_SET_PROPERTY);
+    emitShort(name);
+  } else if (canAssign && matchCompound(&compound)) {
+    // The receiver is needed twice, once to read the property and once to
+    // write it back, so it is duplicated rather than evaluated twice.
+    emitByte(OP_DUP);
+    emitByte(OP_GET_PROPERTY);
+    emitShort(name);
+    expression();
+    emitByte(compound);
     emitByte(OP_SET_PROPERTY);
     emitShort(name);
   } else if (!suppressCall_ && match(TokenType::LeftParen)) {
@@ -1100,8 +1316,16 @@ void Compiler::index(bool canAssign) {
   AllowCalls allowCalls(*this);
   expression();
   consume(TokenType::RightBracket, "Expect ']' after an index.");
+  uint8_t compound;
   if (canAssign && match(TokenType::Equal)) {
     expression();
+    emitByte(OP_SET_INDEX);
+  } else if (canAssign && matchCompound(&compound)) {
+    // Both the target and the index are needed twice.
+    emitByte(OP_DUP2);
+    emitByte(OP_GET_INDEX);
+    expression();
+    emitByte(compound);
     emitByte(OP_SET_INDEX);
   } else {
     emitByte(OP_GET_INDEX);
@@ -1261,6 +1485,22 @@ const ParseRule* Compiler::getRule(TokenType type) {
       /* Try          */ {nullptr, nullptr, Precedence::None},
       /* While        */ {nullptr, nullptr, Precedence::None},
       /* As           */ {nullptr, nullptr, Precedence::None},
+      /* Ampersand    */ {nullptr, &Compiler::binary, Precedence::BitAnd},
+      /* Pipe         */ {nullptr, &Compiler::binary, Precedence::BitOr},
+      /* Caret        */ {nullptr, &Compiler::binary, Precedence::BitXor},
+      /* Tilde        */ {&Compiler::unary, nullptr, Precedence::None},
+      /* LessLess     */ {nullptr, &Compiler::binary, Precedence::Shift},
+      /* GreaterGreater */ {nullptr, &Compiler::binary, Precedence::Shift},
+      /* PlusEqual    */ {nullptr, nullptr, Precedence::None},
+      /* MinusEqual   */ {nullptr, nullptr, Precedence::None},
+      /* StarEqual    */ {nullptr, nullptr, Precedence::None},
+      /* SlashEqual   */ {nullptr, nullptr, Precedence::None},
+      /* PercentEqual */ {nullptr, nullptr, Precedence::None},
+      /* In           */ {nullptr, nullptr, Precedence::None},
+      /* Switch       */ {nullptr, nullptr, Precedence::None},
+      /* Case         */ {nullptr, nullptr, Precedence::None},
+      /* Default      */ {nullptr, nullptr, Precedence::None},
+      /* Ellipsis     */ {nullptr, nullptr, Precedence::None},
       /* Error        */ {nullptr, nullptr, Precedence::None},
       /* Eof          */ {nullptr, nullptr, Precedence::None},
   };

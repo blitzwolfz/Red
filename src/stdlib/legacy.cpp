@@ -16,11 +16,6 @@ namespace red {
 
 namespace {
 
-bool fileExists(const std::string& path) {
-  struct stat info;
-  return ::stat(path.c_str(), &info) == 0;
-}
-
 // Wraps a path for the shell. Single quotes protect everything except a
 // single quote itself, which is spliced in separately.
 std::string shellQuote(const std::string& text) {

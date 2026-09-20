@@ -71,6 +71,27 @@ enum OpCode : uint8_t {
 
   OP_SPAWN,
   OP_IMPORT,
+
+  // Added after the first release. New opcodes go at the end so that the
+  // numbering of the originals does not move.
+  OP_DUP,
+  OP_DUP2,
+  OP_BIT_AND,
+  OP_BIT_OR,
+  OP_BIT_XOR,
+  OP_BIT_NOT,
+  OP_SHIFT_LEFT,
+  OP_SHIFT_RIGHT,
+  // Turns the value on top into something a for-in loop can step
+  // through: an array stays as it is, a map becomes its keys, a string
+  // becomes its characters.
+  OP_ITER_PREP,
+  // Reads the sequence and index locals named by its operands. Pushes
+  // the next element and advances, or jumps when the sequence is spent.
+  OP_ITER_NEXT,
+  // Jumps when the argument at the given index was actually passed. Used
+  // to skip over a parameter's default value.
+  OP_JUMP_IF_ARG,
 };
 
 // Source lines are stored as runs rather than one int per byte. Straight

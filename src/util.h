@@ -6,6 +6,8 @@
 
 namespace red {
 
+// Is there a file or directory at this path?
+bool fileExists(const std::string& path);
 // Reads a whole file. Returns false when the file cannot be opened.
 bool readFile(const std::string& path, std::string* out);
 // Directory part of a path, without the trailing separator. Returns "."
