@@ -18,6 +18,7 @@ add_executable(red
   src/debug.cpp
   src/runtime.cpp
   src/scanner.cpp
+  src/serialize.cpp
   src/table.cpp
   src/util.cpp
   src/value.cpp

@@ -18,3 +18,4 @@ compile_commands.json
 word_count_sample.txt
 
 *.pdf
+*.redc

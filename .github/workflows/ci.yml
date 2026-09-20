@@ -44,12 +44,20 @@ jobs:
       - name: Tests under GC stress
         run: python3 tests/run.py --red build/red --tests tests --gc-stress
 
+      # Compile every test ahead of time and run the .redc instead, which
+      # checks that the compiled format round trips the whole language.
+      - name: Tests compiled ahead of time
+        run: python3 tests/run.py --red build/red --tests tests --compiled
+
       - name: Examples
         run: |
           ./build/red examples/tour.red
           ./build/red examples/echo_server.red
           ./build/red examples/word_count.red
           ./build/red examples/legacy_bridge.red
+          ./build/red examples/mini_compiler.red
+          ./build/red compile examples/tour.red -o /tmp/tour.redc
+          ./build/red /tmp/tour.redc
 
       - name: Disassembler
         run: ./build/red disasm examples/tiny.red
@@ -79,6 +87,7 @@ jobs:
       - name: Tests under sanitizers and GC stress
         run: |
           python3 tests/run.py --red build-asan/red --tests tests --gc-stress
+          python3 tests/run.py --red build-asan/red --tests tests --compiled
 
       - name: Configure with the thread sanitizer
         run: |

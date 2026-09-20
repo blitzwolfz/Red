@@ -49,9 +49,34 @@ def parse_expectations(path):
     return output, runtime_errors, compile_errors
 
 
-def run_one(red, path, extra_args):
+def compile_ahead(red, path):
+    """Compiles a test to a .redc beside it. Returns the compiled path."""
+    compiled = path[:-4] + ".redc"
+    result = subprocess.run(
+        [red, "compile", path, "-o", compiled],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        return None
+    return compiled
+
+
+def run_one(red, path, extra_args, compiled=False):
     expected, runtime_errors, compile_errors = parse_expectations(path)
     path = os.path.abspath(path)
+
+    temporary = None
+    if compiled:
+        # A test that is meant not to compile has nothing to run.
+        if compile_errors:
+            return []
+        temporary = compile_ahead(red, path)
+        if temporary is None:
+            return ["could not compile ahead of time"]
+        path = temporary
+
     command = [red] + extra_args + [path]
     try:
         result = subprocess.run(
@@ -63,6 +88,12 @@ def run_one(red, path, extra_args):
         )
     except subprocess.TimeoutExpired:
         return ["timed out after 120 seconds"]
+
+    if temporary is not None:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
 
     failures = []
     actual = [line for line in result.stdout.split("\n")]
@@ -107,6 +138,11 @@ def main():
         action="store_true",
         help="run every test with a collection before each allocation",
     )
+    parser.add_argument(
+        "--compiled",
+        action="store_true",
+        help="compile each test to a .redc first, then run that",
+    )
     parser.add_argument("--filter", default="", help="only run matching names")
     args = parser.parse_args()
 
@@ -134,7 +170,7 @@ def main():
     failed = []
     for path in paths:
         name = os.path.relpath(path, args.tests)
-        failures = run_one(red, path, extra)
+        failures = run_one(red, path, extra, args.compiled)
         if failures:
             failed.append((name, failures))
             print(f"{RED}FAIL{OFF} {name}")
@@ -145,7 +181,12 @@ def main():
             print(f"{GREEN}ok{OFF}   {name}")
 
     total = passed + len(failed)
-    mode = " (gc stress)" if args.gc_stress else ""
+    modes = []
+    if args.gc_stress:
+        modes.append("gc stress")
+    if args.compiled:
+        modes.append("compiled ahead of time")
+    mode = " (" + ", ".join(modes) + ")" if modes else ""
     print(f"\n{passed}/{total} tests passed{mode}")
     return 1 if failed else 0
 

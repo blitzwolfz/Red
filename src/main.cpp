@@ -12,6 +12,7 @@
 #include "debug.h"
 #include "runtime.h"
 #include "scanner.h"
+#include "serialize.h"
 #include "stdlib/builtins.h"
 #include "util.h"
 #include "vm.h"
@@ -33,10 +34,11 @@ void printUsage() {
       "Red %s\n"
       "\n"
       "Usage:\n"
-      "  red <script.red> [args...]   run a program\n"
-      "  red run <script.red> [args]  same, stated explicitly\n"
+      "  red <program> [args...]      run a program, source or compiled\n"
+      "  red run <program> [args]     same, stated explicitly\n"
+      "  red compile <in.red> [-o f]  compile ahead of time to a .redc file\n"
       "  red repl                     start the interactive prompt\n"
-      "  red disasm <script.red>      print the compiled bytecode\n"
+      "  red disasm <program>         print the compiled bytecode\n"
       "  red legacy <script.red>      run a script on the v1 Java interpreter\n"
       "  red bench [directory]        run the benchmark suite\n"
       "  red version                  print the version\n"
@@ -92,7 +94,24 @@ int runScript(Runtime& runtime, const std::string& path) {
   if (dot != std::string::npos) name = name.substr(0, dot);
 
   ObjModule* module = makeModule(runtime, resolved, name);
-  InterpretResult status = vm.interpret(source, module);
+
+  InterpretResult status;
+  if (looksCompiled(source)) {
+    // Already compiled, so the compiler never runs.
+    std::string reason;
+    ObjFunction* function = readCompiled(runtime, source, module, &reason);
+    if (function == nullptr) {
+      std::fprintf(stderr, "Cannot load '%s': %s\n", path.c_str(),
+                   reason.c_str());
+      vm.detach();
+      runtime.joinAllTasks();
+      return kExitCompileError;
+    }
+    status = vm.runFunction(function);
+  } else {
+    status = vm.interpret(source, module);
+  }
+
   if (status == InterpretResult::RuntimeError) reportRuntimeError(vm);
   vm.detach();
 
@@ -112,9 +131,77 @@ int disassembleScript(Runtime& runtime, const std::string& path) {
 
   std::lock_guard<std::mutex> guard(runtime.lock);
   ObjModule* module = makeModule(runtime, resolved, "main");
+
+  ObjFunction* function;
+  if (looksCompiled(source)) {
+    std::string reason;
+    function = readCompiled(runtime, source, module, &reason);
+    if (function == nullptr) {
+      std::fprintf(stderr, "Cannot load '%s': %s\n", path.c_str(),
+                   reason.c_str());
+      return kExitCompileError;
+    }
+  } else {
+    function = compile(runtime, source, module);
+    if (function == nullptr) return kExitCompileError;
+  }
+  disassembleChunk(function->chunk, "<script> " + path);
+  return 0;
+}
+
+// Replaces a .red suffix with .redc, or adds it.
+std::string compiledNameFor(const std::string& path) {
+  if (path.size() > 4 && path.compare(path.size() - 4, 4, ".red") == 0) {
+    return path + "c";
+  }
+  return path + ".redc";
+}
+
+int compileToFile(Runtime& runtime, const std::string& path,
+                  const std::string& outPath) {
+  std::string source;
+  std::string resolved = absolutePath(path);
+  if (!readFile(resolved, &source)) {
+    std::fprintf(stderr, "Cannot open '%s'.\n", path.c_str());
+    return kExitUsage;
+  }
+  if (looksCompiled(source)) {
+    std::fprintf(stderr, "'%s' is already compiled.\n", path.c_str());
+    return kExitUsage;
+  }
+
+  std::lock_guard<std::mutex> guard(runtime.lock);
+  std::string name = path.substr(path.find_last_of('/') + 1);
+  size_t dot = name.find_last_of('.');
+  if (dot != std::string::npos) name = name.substr(0, dot);
+
+  ObjModule* module = makeModule(runtime, resolved, name);
   ObjFunction* function = compile(runtime, source, module);
   if (function == nullptr) return kExitCompileError;
-  disassembleChunk(function->chunk, "<script> " + path);
+  GCRoot functionRoot(runtime, (Obj*)function);
+
+  std::string bytes;
+  std::string reason;
+  if (!writeCompiled(function, &bytes, &reason)) {
+    std::fprintf(stderr, "Cannot compile '%s': %s\n", path.c_str(),
+                 reason.c_str());
+    return kExitCompileError;
+  }
+
+  FILE* out = std::fopen(outPath.c_str(), "wb");
+  if (out == nullptr) {
+    std::fprintf(stderr, "Cannot write '%s'.\n", outPath.c_str());
+    return kExitUsage;
+  }
+  size_t written = std::fwrite(bytes.data(), 1, bytes.size(), out);
+  std::fclose(out);
+  if (written != bytes.size()) {
+    std::fprintf(stderr, "Cannot write '%s'.\n", outPath.c_str());
+    return kExitUsage;
+  }
+
+  std::printf("%s -> %s (%zu bytes)\n", path.c_str(), outPath.c_str(),
+              bytes.size());
   return 0;
 }
 
@@ -295,9 +382,11 @@ int main(int argc, const char* argv[]) {
     } else {
       positional.push_back(arg);
       // Everything after the script name belongs to the script.
-      if (positional.size() >= 2 || (positional.size() == 1 &&
-                                     arg.size() > 4 &&
-                                     arg.substr(arg.size() - 4) == ".red")) {
+      bool looksLikeAProgram =
+          (arg.size() > 4 && arg.compare(arg.size() - 4, 4, ".red") == 0) ||
+          (arg.size() > 5 && arg.compare(arg.size() - 5, 5, ".redc") == 0);
+      if (positional.size() >= 2 ||
+          (positional.size() == 1 && looksLikeAProgram)) {
         for (int j = i + 1; j < argc; j++) positional.push_back(argv[j]);
         break;
       }
@@ -334,6 +423,17 @@ int main(int argc, const char* argv[]) {
       return kExitUsage;
     }
     return runLegacy(positional[1]);
+  }
+  if (command == "compile") {
+    if (positional.size() < 2) {
+      std::fprintf(stderr, "Usage: red compile <script.red> [-o out.redc]\n");
+      return kExitUsage;
+    }
+    std::string outPath = compiledNameFor(positional[1]);
+    for (size_t i = 2; i + 1 < positional.size(); i++) {
+      if (positional[i] == "-o") outPath = positional[i + 1];
+    }
+    return compileToFile(runtime, positional[1], outPath);
   }
   if (command == "bench") {
     std::string directory = positional.size() > 1 ? positional[1] : "bench";
