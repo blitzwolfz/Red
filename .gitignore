@@ -1,2 +1,20 @@
+# Build output
+build/
+build-*/
+*.o
+*.so
+*.dylib
+*.jar
+*.class
+
+# Editor and system files
+.DS_Store
+.vscode/
+.idea/
+compile_commands.json
+
+# Test and example leftovers
+*.tmp
+word_count_sample.txt
 
 *.pdf
