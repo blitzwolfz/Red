@@ -118,6 +118,20 @@ Value nativeError(VM& vm, int argCount, Value* args) {
   return objValue((Obj*)rt.newError(message, trace, payload));
 }
 
+// Turns a byte value into a one character string. This is what lets Red
+// build binary output, which a self-hosted compiler needs in order to
+// write a compiled file.
+Value nativeChr(VM& vm, int, Value* args) {
+  double code;
+  if (!wantNumber(vm, args[0], "chr()", &code)) return nilValue();
+  if (code < 0 || code > 255 || code != std::floor(code)) {
+    return vm.fail("chr() expects a whole number from 0 to 255, got %s.",
+                   valueToString(args[0]).c_str());
+  }
+  char byte = (char)(unsigned char)code;
+  return objValue((Obj*)vm.runtime().copyString(&byte, 1));
+}
+
 Value nativeRange(VM& vm, int argCount, Value* args) {
   double start = 0, stop = 0, step = 1;
   if (argCount == 1) {
@@ -221,6 +235,33 @@ Value nativeMax(VM& vm, int argCount, Value* args) {
 
 Value stringLen(VM&, int, Value* args) {
   return numberValue((double)asString(args[0])->length);
+}
+
+// The byte at an index, as a number. Negative indexes count back from
+// the end, the same way subscripting does.
+Value stringCodeAt(VM& vm, int, Value* args) {
+  ObjString* text = asString(args[0]);
+  double rawIndex;
+  if (!wantNumber(vm, args[1], "code_at()", &rawIndex)) return nilValue();
+  long index = (long)rawIndex;
+  if (index < 0) index += (long)text->length;
+  if (index < 0 || index >= (long)text->length) {
+    return vm.fail("code_at() index %ld out of range for length %zu.",
+                   (long)rawIndex, text->length);
+  }
+  return numberValue((double)(unsigned char)text->chars[index]);
+}
+
+// Every byte as an array of numbers.
+Value stringBytes(VM& vm, int, Value* args) {
+  ObjString* text = asString(args[0]);
+  ObjArray* result = vm.runtime().newArray();
+  GCRoot resultRoot(vm.runtime(), (Obj*)result);
+  result->items.reserve(text->length);
+  for (size_t i = 0; i < text->length; i++) {
+    result->items.push_back(numberValue((double)(unsigned char)text->chars[i]));
+  }
+  return objValue((Obj*)result);
 }
 
 Value stringUpper(VM& vm, int, Value* args) {
@@ -648,6 +689,7 @@ void installCore(Runtime& runtime) {
   defineGlobalFn(runtime, "len", nativeLen, 1);
   defineGlobalFn(runtime, "assert", nativeAssert, -1);
   defineGlobalFn(runtime, "error", nativeError, -1);
+  defineGlobalFn(runtime, "chr", nativeChr, 1);
   defineGlobalFn(runtime, "range", nativeRange, -1);
   defineGlobalFn(runtime, "input", nativeInput, -1);
   defineGlobalFn(runtime, "abs", nativeAbs, 1);
@@ -659,6 +701,8 @@ void installCore(Runtime& runtime) {
   defineGlobalFn(runtime, "max", nativeMax, -1);
 
   defineMethodFn(runtime, ObjType::String, "len", stringLen, 1);
+  defineMethodFn(runtime, ObjType::String, "code_at", stringCodeAt, 2);
+  defineMethodFn(runtime, ObjType::String, "bytes", stringBytes, 1);
   defineMethodFn(runtime, ObjType::String, "upper", stringUpper, 1);
   defineMethodFn(runtime, ObjType::String, "lower", stringLower, 1);
   defineMethodFn(runtime, ObjType::String, "trim", stringTrim, 1);
