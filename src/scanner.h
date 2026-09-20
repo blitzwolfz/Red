@@ -32,7 +32,7 @@ enum class TokenType {
   // existing indexes.
   Ampersand, Pipe, Caret, Tilde, LessLess, GreaterGreater,
   PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual,
-  In, Switch, Case, Default, Ellipsis, Enum,
+  In, Switch, Case, Default, Ellipsis, Enum, Finally,
 
   Error, Eof,
 };

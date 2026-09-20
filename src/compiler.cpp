@@ -1,5 +1,6 @@
 #include "compiler.h"
 
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <unordered_set>
@@ -46,6 +47,30 @@ struct Local {
 struct CompilerUpvalue {
   uint8_t index;
   bool isLocal;
+};
+
+// One per try statement being compiled. Every way out of a try routes
+// through its finally block, so each exit records why it is leaving in
+// the action slot and what it is carrying in the pending slot.
+struct FinallyContext {
+  int actionSlot = 0;
+  int pendingSlot = 0;
+  // Jumps from return, break and continue inside the try body.
+  std::vector<int> jumpsToFinally;
+  int scopeDepth = 0;
+  int tryDepth = 0;
+  // Loops open when the try began, used to tell whether a break inside
+  // the body belongs to a loop outside the try.
+  int loopDepth = 0;
+};
+
+// What the code after a finally block has to do next.
+enum class FinallyAction {
+  FallThrough = 0,
+  Rethrow = 1,
+  Return = 2,
+  Break = 3,
+  Continue = 4,
 };
 
 // Tracks where break and continue should jump for the innermost loop.
@@ -105,6 +130,7 @@ struct FunctionState {
   std::vector<LoopState> loops;
   // Try blocks currently open in this function.
   int tryDepth = 0;
+  std::vector<FinallyContext> finallys;
   // Worst case stack use, used to fill ObjFunction::slotCount.
   int maxLocals = 0;
   int maxTemps = 0;
@@ -188,6 +214,15 @@ class Compiler {
   void emitReturn();
   int makeConstant(Value value);
   void emitConstant(Value value);
+  // Offset of the last OP_CONSTANT emitted, or -1 when the last thing
+  // emitted was something else. This is what lets the folder recognise
+  // two literals sitting next to each other.
+  int lastConstant_ = -1;
+  Value constantAt(int offset) const;
+  // Replaces two adjacent constants and an operator with the answer.
+  // Work done here is work the program never repeats, which is the point
+  // of compiling ahead of time.
+  bool tryFoldBinary(TokenType op, int leftOffset, int rightOffset);
   int identifierConstant(const std::string& name);
 
   // ---- scopes and variables ----
@@ -242,8 +277,14 @@ class Compiler {
   void continueStatement();
   void tryStatement();
   void throwStatement();
-  void popLoopLocals(int targetDepth);
+  void popLocalsTo(int targetDepth);
   void closeLoopHandlers();
+  // Leaves the innermost try through its finally block. For a return the
+  // value is already on the stack.
+  void exitThroughFinally(FinallyAction action, bool carriesValue);
+  void emitFinallyDispatch(const FinallyContext& context);
+  // Is the innermost try inside the loop that a break would leave?
+  bool breakRunsFinally() const;
 
   void function(FunctionKind kind, const std::string& name);
   void method();
@@ -352,7 +393,11 @@ void Compiler::synchronize() {
 // ---------------------------------------------------------------------
 // emitting
 
-void Compiler::emitByte(uint8_t byte) { chunk().write(byte, previous_.line); }
+void Compiler::emitByte(uint8_t byte) {
+  // Anything else emitted breaks the run the folder looks for.
+  lastConstant_ = -1;
+  chunk().write(byte, previous_.line);
+}
 
 void Compiler::emitBytes(uint8_t a, uint8_t b) {
   emitByte(a);
@@ -406,8 +451,71 @@ int Compiler::makeConstant(Value value) {
 }
 
 void Compiler::emitConstant(Value value) {
+  int offset = (int)chunk().code.size();
   emitByte(OP_CONSTANT);
   emitShort(makeConstant(value));
+  lastConstant_ = offset;
+}
+
+Value Compiler::constantAt(int offset) const {
+  const Chunk& code = state_->function->chunk;
+  int index = (code.code[(size_t)offset + 1] << 8) | code.code[(size_t)offset + 2];
+  return code.constants[(size_t)index];
+}
+
+bool Compiler::tryFoldBinary(TokenType op, int leftOffset, int rightOffset) {
+  Value left = constantAt(leftOffset);
+  Value right = constantAt(rightOffset);
+  Value folded;
+
+  if (isNumber(left) && isNumber(right)) {
+    double a = asNumber(left);
+    double b = asNumber(right);
+    switch (op) {
+      case TokenType::Plus: folded = numberValue(a + b); break;
+      case TokenType::Minus: folded = numberValue(a - b); break;
+      case TokenType::Star: folded = numberValue(a * b); break;
+      case TokenType::Slash:
+        // Left alone so that it still reports at run time, where the
+        // line and the call stack are available.
+        if (b == 0) return false;
+        folded = numberValue(a / b);
+        break;
+      case TokenType::Percent:
+        if (b == 0) return false;
+        folded = numberValue(std::fmod(a, b));
+        break;
+      case TokenType::Ampersand:
+        folded = numberValue((double)(toInt32(a) & toInt32(b)));
+        break;
+      case TokenType::Pipe:
+        folded = numberValue((double)(toInt32(a) | toInt32(b)));
+        break;
+      case TokenType::Caret:
+        folded = numberValue((double)(toInt32(a) ^ toInt32(b)));
+        break;
+      case TokenType::LessLess:
+        folded = numberValue(
+            (double)(int32_t)((uint32_t)toInt32(a) << (toInt32(b) & 31)));
+        break;
+      case TokenType::GreaterGreater:
+        folded = numberValue((double)(toInt32(a) >> (toInt32(b) & 31)));
+        break;
+      default: return false;
+    }
+  } else if (op == TokenType::Plus && isString(left) && isString(right)) {
+    std::string joined(asString(left)->chars, asString(left)->length);
+    joined.append(asString(right)->chars, asString(right)->length);
+    folded = objValue(
+        (Obj*)runtime_.copyString(joined.data(), joined.size()));
+  } else {
+    return false;
+  }
+
+  chunk().truncate((size_t)leftOffset);
+  emitConstant(folded);
+  (void)rightOffset;
+  return true;
 }
 
 int Compiler::identifierConstant(const std::string& name) {
@@ -1275,10 +1383,94 @@ void Compiler::switchStatement() {
   endScope();
 }
 
-void Compiler::popLoopLocals(int targetDepth) {
+void Compiler::popLocalsTo(int targetDepth) {
   for (int i = (int)state_->locals.size() - 1; i >= 0; i--) {
     if (state_->locals[(size_t)i].depth <= targetDepth) break;
     emitByte(state_->locals[(size_t)i].isCaptured ? OP_CLOSE_UPVALUE : OP_POP);
+  }
+}
+
+bool Compiler::breakRunsFinally() const {
+  // Only when the innermost try was opened inside the loop the break is
+  // leaving. A try wrapped around the whole loop is not in the way.
+  return !state_->finallys.empty() &&
+         state_->finallys.back().loopDepth == (int)state_->loops.size();
+}
+
+void Compiler::exitThroughFinally(FinallyAction action, bool carriesValue) {
+  FinallyContext& context = state_->finallys.back();
+  if (carriesValue) {
+    emitByte(OP_SET_LOCAL);
+    emitByte((uint8_t)context.pendingSlot);
+    emitByte(OP_POP);
+  }
+  emitConstant(numberValue((double)(int)action));
+  emitByte(OP_SET_LOCAL);
+  emitByte((uint8_t)context.actionSlot);
+  emitByte(OP_POP);
+
+  // Close the try's own handler and drop anything its body declared, so
+  // the finally block starts from the depth it expects.
+  for (int i = state_->tryDepth; i > context.tryDepth; i--) {
+    emitByte(OP_TRY_END);
+  }
+  popLocalsTo(context.scopeDepth);
+  context.jumpsToFinally.push_back(emitJump(OP_JUMP));
+}
+
+// Runs straight after the finally body. The action slot says what the
+// exit that reached here was trying to do, and this carries it out. The
+// context has already been popped, so a return or a break here routes
+// through an enclosing finally if there is one.
+void Compiler::emitFinallyDispatch(const FinallyContext& context) {
+  const FinallyAction actions[] = {
+      FinallyAction::Rethrow, FinallyAction::Return, FinallyAction::Break,
+      FinallyAction::Continue};
+
+  for (FinallyAction action : actions) {
+    bool insideLoop =
+        action != FinallyAction::Break && action != FinallyAction::Continue;
+    if (!insideLoop && state_->loops.empty()) continue;
+
+    emitByte(OP_GET_LOCAL);
+    emitByte((uint8_t)context.actionSlot);
+    emitConstant(numberValue((double)(int)action));
+    emitByte(OP_EQUAL);
+    int skip = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP);
+
+    if (action == FinallyAction::Rethrow) {
+      emitByte(OP_GET_LOCAL);
+      emitByte((uint8_t)context.pendingSlot);
+      emitByte(OP_THROW);
+    } else if (action == FinallyAction::Return) {
+      emitByte(OP_GET_LOCAL);
+      emitByte((uint8_t)context.pendingSlot);
+      if (state_->finallys.empty()) {
+        emitByte(OP_RETURN);
+      } else {
+        exitThroughFinally(FinallyAction::Return, true);
+      }
+    } else if (action == FinallyAction::Break) {
+      if (breakRunsFinally()) {
+        exitThroughFinally(FinallyAction::Break, false);
+      } else {
+        closeLoopHandlers();
+        popLocalsTo(state_->loops.back().scopeDepth);
+        state_->loops.back().breakJumps.push_back(emitJump(OP_JUMP));
+      }
+    } else {
+      if (breakRunsFinally()) {
+        exitThroughFinally(FinallyAction::Continue, false);
+      } else {
+        closeLoopHandlers();
+        popLocalsTo(state_->loops.back().scopeDepth);
+        emitLoop(state_->loops.back().continueTarget);
+      }
+    }
+
+    patchJump(skip);
+    emitByte(OP_POP);
   }
 }
 
@@ -1288,8 +1480,12 @@ void Compiler::breakStatement() {
     return;
   }
   consume(TokenType::Semicolon, "Expect ';' after 'break'.");
+  if (breakRunsFinally()) {
+    exitThroughFinally(FinallyAction::Break, false);
+    return;
+  }
   closeLoopHandlers();
-  popLoopLocals(state_->loops.back().scopeDepth);
+  popLocalsTo(state_->loops.back().scopeDepth);
   state_->loops.back().breakJumps.push_back(emitJump(OP_JUMP));
 }
 
@@ -1299,8 +1495,12 @@ void Compiler::continueStatement() {
     return;
   }
   consume(TokenType::Semicolon, "Expect ';' after 'continue'.");
+  if (breakRunsFinally()) {
+    exitThroughFinally(FinallyAction::Continue, false);
+    return;
+  }
   closeLoopHandlers();
-  popLoopLocals(state_->loops.back().scopeDepth);
+  popLocalsTo(state_->loops.back().scopeDepth);
   emitLoop(state_->loops.back().continueTarget);
 }
 
@@ -1308,19 +1508,62 @@ void Compiler::returnStatement() {
   if (state_->kind == FunctionKind::Script) {
     error("Cannot return from top level code.");
   }
+
   if (match(TokenType::Semicolon)) {
-    emitReturn();
+    if (state_->finallys.empty()) {
+      emitReturn();
+      return;
+    }
+    // Leaving through a finally carries the value on the stack, so the
+    // implicit one has to be made explicit.
+    if (state_->kind == FunctionKind::Initializer) {
+      emitByte(OP_GET_LOCAL);
+      emitByte(0);
+    } else {
+      emitByte(OP_NIL);
+    }
+    exitThroughFinally(FinallyAction::Return, true);
     return;
   }
+
   if (state_->kind == FunctionKind::Initializer) {
     error("Cannot return a value from an initializer.");
   }
   expression();
   consume(TokenType::Semicolon, "Expect ';' after a return value.");
-  emitByte(OP_RETURN);
+  if (state_->finallys.empty()) {
+    emitByte(OP_RETURN);
+    return;
+  }
+  exitThroughFinally(FinallyAction::Return, true);
 }
 
+// try { A } catch (e: F) { B } ... finally { C }
+//
+// Every way out of A and B goes through C: falling off the end, a caught
+// error, an error nothing matched, and return, break or continue. That
+// is arranged with two hidden slots. The action slot records why control
+// is leaving, the pending slot carries the error or the return value,
+// and one copy of C runs before a dispatch acts on the action.
+//
+// The slots are allocated for every try, not only those with a finally,
+// because in a single pass the finally is not seen until after the body
+// has been compiled.
 void Compiler::tryStatement() {
+  beginScope();
+  emitByte(OP_NIL);
+  int pendingSlot = addHiddenLocal("  pending");
+  emitConstant(numberValue((double)(int)FinallyAction::FallThrough));
+  int actionSlot = addHiddenLocal("  action");
+
+  FinallyContext context;
+  context.actionSlot = actionSlot;
+  context.pendingSlot = pendingSlot;
+  context.scopeDepth = state_->scopeDepth;
+  context.tryDepth = state_->tryDepth;
+  context.loopDepth = (int)state_->loops.size();
+  state_->finallys.push_back(context);
+
   int handlerJump = emitJump(OP_TRY_BEGIN);
   state_->tryDepth++;
   beginScope();
@@ -1329,14 +1572,29 @@ void Compiler::tryStatement() {
   endScope();
   state_->tryDepth--;
   emitByte(OP_TRY_END);
-  int doneJump = emitJump(OP_JUMP);
+  int normalJump = emitJump(OP_JUMP);
 
-  // Control arrives here with the stack cut back to its depth at
-  // TRY_BEGIN and the error value pushed on top. It goes into a hidden
-  // slot so that every clause can look at the same error.
+  // The error arrives on the stack with everything above the try cut
+  // away. It goes into a slot so that every clause can look at it.
   patchJump(handlerJump);
   beginScope();
   int errorSlot = addHiddenLocal("  error");
+
+  // Until a clause claims it, the error is on its way out.
+  emitByte(OP_GET_LOCAL);
+  emitByte((uint8_t)errorSlot);
+  emitByte(OP_SET_LOCAL);
+  emitByte((uint8_t)pendingSlot);
+  emitByte(OP_POP);
+  emitConstant(numberValue((double)(int)FinallyAction::Rethrow));
+  emitByte(OP_SET_LOCAL);
+  emitByte((uint8_t)actionSlot);
+  emitByte(OP_POP);
+
+  // The clause bodies get a handler of their own, so that a finally
+  // still runs when a catch block is the thing that fails.
+  int clauseFailJump = emitJump(OP_TRY_BEGIN);
+  state_->tryDepth++;
 
   std::vector<int> clauseDone;
   bool sawCatchAll = false;
@@ -1355,8 +1613,8 @@ void Compiler::tryStatement() {
 
     int skipJump = -1;
     if (match(TokenType::Colon)) {
-      // A filter is an ordinary expression, so it can be a string kind, a
-      // class, or anything that produces one.
+      // A filter is an ordinary expression, so it can be a string kind,
+      // a class, or anything that produces one.
       emitByte(OP_GET_LOCAL);
       emitByte((uint8_t)errorSlot);
       expression();
@@ -1368,6 +1626,13 @@ void Compiler::tryStatement() {
     }
     consume(TokenType::RightParen, "Expect ')' after the error variable.");
     consume(TokenType::LeftBrace, "Expect '{' before a catch block.");
+
+    // This clause has claimed the error, so it is no longer on its way
+    // out unless the body says otherwise.
+    emitConstant(numberValue((double)(int)FinallyAction::FallThrough));
+    emitByte(OP_SET_LOCAL);
+    emitByte((uint8_t)actionSlot);
+    emitByte(OP_POP);
 
     beginScope();
     emitByte(OP_GET_LOCAL);
@@ -1384,22 +1649,49 @@ void Compiler::tryStatement() {
     }
   }
 
-  if (!sawClause) {
-    errorAtCurrent("Expect 'catch' after a try block.");
-  }
-
-  if (!sawCatchAll) {
-    // No clause matched, so the error carries on outwards unchanged.
-    emitByte(OP_GET_LOCAL);
-    emitByte((uint8_t)errorSlot);
-    emitByte(OP_THROW);
-  }
-
   for (int jump : clauseDone) patchJump(jump);
-  // Drops the hidden error. The ordinary path jumps past this.
+  state_->tryDepth--;
+  emitByte(OP_TRY_END);
+  int handlerDoneJump = emitJump(OP_JUMP);
+
+  // A catch block threw. Carry its error instead of the original one.
+  patchJump(clauseFailJump);
+  emitByte(OP_SET_LOCAL);
+  emitByte((uint8_t)pendingSlot);
+  emitByte(OP_POP);
+  emitConstant(numberValue((double)(int)FinallyAction::Rethrow));
+  emitByte(OP_SET_LOCAL);
+  emitByte((uint8_t)actionSlot);
+  emitByte(OP_POP);
+
+  patchJump(handlerDoneJump);
   endScope();
-  patchJump(doneJump);
+  int handlerToFinally = emitJump(OP_JUMP);
+
+  // Everything converges here: the ordinary path, the handler, and any
+  // return, break or continue from inside the body.
+  patchJump(normalJump);
+  patchJump(handlerToFinally);
+  for (int jump : state_->finallys.back().jumpsToFinally) patchJump(jump);
+  state_->finallys.pop_back();
+
+  bool sawFinally = false;
+  if (match(TokenType::Finally)) {
+    sawFinally = true;
+    beginScope();
+    consume(TokenType::LeftBrace, "Expect '{' after 'finally'.");
+    block();
+    endScope();
+  }
+
+  if (!sawClause && !sawFinally) {
+    errorAtCurrent("Expect 'catch' or 'finally' after a try block.");
+  }
+
+  emitFinallyDispatch(context);
+  endScope();
 }
+
 
 void Compiler::throwStatement() {
   expression();
@@ -1534,8 +1826,17 @@ void Compiler::unary(bool) {
 
 void Compiler::binary(bool) {
   TokenType op = previous_.type;
+  // Where the left operand's constant sits, if it was a bare literal.
+  int leftConstant = lastConstant_;
   const ParseRule* rule = getRule(op);
   parsePrecedence((Precedence)((int)rule->precedence + 1));
+
+  // The right operand must have emitted exactly one constant, directly
+  // after the left one, for this to be two literals and nothing else.
+  if (leftConstant >= 0 && lastConstant_ == leftConstant + 3 &&
+      tryFoldBinary(op, leftConstant, lastConstant_)) {
+    return;
+  }
 
   switch (op) {
     case TokenType::BangEqual: emitByte(OP_NOT_EQUAL); break;
@@ -1785,6 +2086,7 @@ const ParseRule* Compiler::getRule(TokenType type) {
       /* Default      */ {nullptr, nullptr, Precedence::None},
       /* Ellipsis     */ {nullptr, nullptr, Precedence::None},
       /* Enum         */ {nullptr, nullptr, Precedence::None},
+      /* Finally      */ {nullptr, nullptr, Precedence::None},
       /* Error        */ {nullptr, nullptr, Precedence::None},
       /* Eof          */ {nullptr, nullptr, Precedence::None},
   };
