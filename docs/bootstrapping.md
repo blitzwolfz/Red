@@ -46,14 +46,31 @@ code to rewrite in a language as small as Red.
 
 ## What Red is missing
 
-The compiler produces bytes. Red cannot work with bytes properly yet.
-These gaps have to close first.
+Most of this list has now closed. What is left is one thing.
 
-Speed is not one of them. That was the early assumption, and measuring it
-showed the opposite. Interning is slow for many *distinct* strings, which
-is what the `string` benchmark creates, and a win for a small vocabulary
-used over and over, which is what a compiler has. On compiler shaped work
-Red matches CPython:
+| Gap | State |
+|---|---|
+| Bitwise operators | **Done.** `&` `\|` `^` `~` `<<` `>>` on 32 bit integers, with a defined shift count and defined wrapping. |
+| Turning a number into a byte | **Done.** `chr(n)` and `text.code_at(i)`, plus `text.bytes()`. |
+| Binary safe file output | **Done.** Strings hold arbitrary bytes including zero, and `write_file` writes them unchanged. A round trip of all 256 byte values is covered by `tests/bytes.red`. |
+| Enough call depth | **Done.** The frame limit is 1024, and a call checks the stack room a function can need before it pushes a frame. |
+| A compiled file format | **Still missing.** This is stage 1 below, and it is now the only thing in the way. |
+
+Splitting a two byte operand, which is the operation the whole emitter is
+built on, now reads the same in Red as it does in the C++:
+
+```red
+fun emitShort(code, value) {
+  code.push(value >> 8 & 255);
+  code.push(value & 255);
+}
+```
+
+Speed is not a gap either. That was the early assumption, and measuring
+it showed the opposite. Interning is slow for many *distinct* strings,
+which is what the `string` benchmark creates, and a win for a small
+vocabulary used over and over, which is what a compiler has. On compiler
+shaped work Red matches CPython:
 
 | Workload | Red |
 |---|--:|
@@ -67,18 +84,11 @@ Single character indexing is nearly free for the same reason: there are
 only so many distinct characters, so `source[i]` finds one already in the
 intern table instead of allocating.
 
-| Gap | Why the compiler needs it |
-|---|---|
-| Bitwise operators | Splitting a two byte operand into two bytes needs `>>` and `&`. |
-| Integer semantics | Red has one number type, a float. Byte values need defined truncation and wrapping. |
-| A byte array type | Building `code` needs a growable array of values in 0 to 255, not a string. |
-| Binary safe file output | `write_file` writes text. Writing a compiled file needs raw bytes. |
-| A compiled file format | There is no way to save a chunk and load it back. |
-| A way to build a byte | `chr(n)` and `code_at(i)`. Strings already carry arbitrary bytes and `write_file` is binary safe, but there is no way to turn the number 200 into a character. This is the one gap that blocks writing a compiled file at all. |
-
 ## Stages
 
 ### Stage 1: a compiled file format
+
+This is now the only thing blocking stage 3.
 
 Define `.redc`: a header with the format version, then the chunk tree.
 Add two things to the C++ side:
@@ -95,12 +105,15 @@ gives the same output as the source did.
 
 ### Stage 2: the missing language pieces
 
-Add bitwise operators, a `bytes` type, and binary file input and output.
-Keep them small and boring. They are not interesting features, they are
-the tools the compiler needs.
+**Finished.** Bitwise operators, `chr`, `code_at` and `bytes` are in, and
+binary file input and output round trips every byte value. `for ... in`,
+`switch`, compound assignment and default and rest parameters went in at
+the same time, because the port in stage 3 is several thousand lines of
+Red and those decide whether it is bearable to write.
 
-**Done when** a Red program can build a `.redc` file by hand, byte by
-byte, and the virtual machine runs it.
+What is left of this stage is the acceptance test itself: a Red program
+that builds a `.redc` file byte by byte and has the virtual machine run
+it. That needs stage 1 first.
 
 ### Stage 3: the self-hosted compiler
 
@@ -148,9 +161,14 @@ runtime is not. Saying so plainly is better than claiming more.
 
 ## Order of work
 
-Stages 1 and 2 are small and useful on their own. Stage 3 is the real
-milestone, and the one worth aiming at. Stage 4 should only start once
-stage 3 is finished and stable.
+Stage 2 is finished. Stage 1 is small and useful on its own, and is now
+the only thing in the way. Stage 3 is the real milestone, and the one
+worth aiming at. Stage 4 should only start once stage 3 is finished and
+stable.
+
+Stage 1 was deliberately left until after the language changes. Writing
+the serialiser first would have frozen the opcode list exactly when it
+was about to gain eleven instructions.
 
 The thing to protect along the way is the bytecode format. Every change to
 it makes the self-hosted compiler and the C++ compiler drift apart. Once

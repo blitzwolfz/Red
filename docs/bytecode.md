@@ -5,7 +5,10 @@ It is the contract between the compiler and the virtual machine, and it is
 what a future self-hosted compiler would target. See
 [bootstrapping.md](bootstrapping.md).
 
-Format version: **1**. The version in `src/common.h` changes whenever the
+Format version: **2**. Version 2 added the duplication, bitwise,
+iteration and default argument instructions listed below. They were added
+at the end of the opcode list, so the numbering of the originals did not
+move. The version in `src/common.h` changes whenever the
 layout below changes in a way that breaks old code.
 
 ## Chunks
@@ -58,6 +61,13 @@ upvalues. The compiler reports an error past that.
 | `TRUE` | | `-> true` |
 | `FALSE` | | `-> false` |
 | `POP` | | `value ->` |
+| `DUP` | | `a -> a a` |
+| `DUP2` | | `a b -> a b a b` |
+
+`DUP` and `DUP2` exist for compound assignment. `obj.field += 1` needs the
+receiver twice, once to read the field and once to write it back, and
+`items[i] += 1` needs both the target and the index twice. Duplicating is
+what keeps the subject from being evaluated a second time.
 
 ### Variables
 
@@ -93,7 +103,12 @@ error properties, and the methods the runtime provides for built-in types.
 | `ADD` `SUBTRACT` `MULTIPLY` `DIVIDE` `MODULO` | `a b -> result` |
 | `EQUAL` `NOT_EQUAL` | `a b -> bool` |
 | `GREATER` `GREATER_EQUAL` `LESS` `LESS_EQUAL` | `a b -> bool` |
-| `NEGATE` `NOT` | `a -> result` |
+| `BIT_AND` `BIT_OR` `BIT_XOR` `SHIFT_LEFT` `SHIFT_RIGHT` | `a b -> result` |
+| `NEGATE` `NOT` `BIT_NOT` | `a -> result` |
+
+The bitwise instructions truncate each operand towards zero and wrap it
+into a 32 bit signed integer before combining them. `SHIFT_RIGHT` keeps
+the sign, and both shifts mask the count to 0 to 31.
 
 `ADD` joins two strings or adds two numbers. The comparisons take two
 numbers or two strings. `DIVIDE` and `MODULO` raise an error on a zero
@@ -174,6 +189,41 @@ Emitted by string interpolation, so `"${x}"` works whatever `x` is.
 address of the catch block. `TRY_END` drops that record when the try block
 finishes normally. Raising an error cuts the frame stack and the value
 stack back to what the record holds, pushes the error, and jumps.
+
+### Iteration
+
+| Opcode | Operands | Stack effect |
+|---|---|---|
+| `ITER_PREP` | | `subject -> sequence` |
+| `ITER_NEXT` | slot, slot, jump | `-> element`, or jumps |
+
+`ITER_PREP` turns the subject into something a loop can step through. An
+array is left alone, a map becomes a snapshot of its keys, and a string
+becomes its characters. Anything else is an error.
+
+`ITER_NEXT` reads the sequence and the position from the two local slots
+its operands name. It pushes the next element and advances the position,
+or jumps when the sequence is spent. The length is read on every pass, so
+a loop over an array that shrinks underneath it stops rather than reading
+past the end.
+
+The element lands on top of the stack, which is exactly the slot the loop
+variable occupies. That is why no separate store instruction is needed.
+
+### Calls with optional arguments
+
+| Opcode | Operands | Stack effect |
+|---|---|---|
+| `JUMP_IF_ARG` | slot, jump | none |
+
+A call pads the parameters it did not supply with nil, and records how
+many were actually passed. The function's prologue then holds one
+`JUMP_IF_ARG` per optional parameter, which skips that parameter's
+default when the call did supply it. This is what keeps an omitted
+argument different from an explicit `nil`.
+
+Rest parameters need no instruction. The call gathers the extra
+arguments into an array before the frame is pushed.
 
 ### Tasks and modules
 

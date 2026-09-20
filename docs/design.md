@@ -36,6 +36,10 @@ back. Two things had to be designed around this:
 - A `for` loop compiles its increment clause before its body, then jumps
   over it. The increment has to run after the body, so the code jumps
   forward into the body and the body jumps back to the increment.
+- `for (let x in items)` and `for (let i = 0; ...)` cannot be told apart
+  until after the name, because `in` only appears once the name has been
+  read. The compiler reads the name first and then decides, rather than
+  looking ahead.
 
 The gain is that compiling is fast and there is no tree to allocate, walk
 or free.
@@ -240,7 +244,7 @@ each loop and emits one `TRY_END` per handler opened since.
 
 ## Stack limits
 
-Two separate bounds. Call depth is capped at 256 frames. That alone does
+Two separate bounds. Call depth is capped at 1024 frames. That alone does
 not keep pushes inside the value stack, because one frame can hold up to
 256 locals plus the temporaries its expressions need, and 256 of those
 would run past the end.
@@ -302,7 +306,9 @@ These are real and they are not hidden:
   [Concurrency](#concurrency).
 - The collector stops the world and does not move objects.
 - Type annotations are parsed and ignored.
-- String-heavy code is slow, because every string is interned.
+- Code that makes many *distinct* strings is slow, because every string
+  is interned. Reusing a small vocabulary is fast, which is why the
+  `string` benchmark looks much worse than real programs do.
 - A task that is never joined is kept alive until the program ends.
 - Each task's value stack is one megabyte, allocated up front. That is
   the price of never moving it, because call frames and open upvalues

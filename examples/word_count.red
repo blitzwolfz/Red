@@ -32,9 +32,8 @@ fun writeSample(path) {
 fun countSlice(lines, start, end, out) {
   const counts = {};
   for (let i = start; i < end; i = i + 1) {
-    const words = lines[i].split(" ");
-    for (let w = 0; w < words.len(); w = w + 1) {
-      const word = words[w].trim().lower();
+    for (let raw in lines[i].split(" ")) {
+      const word = raw.trim().lower();
       if (word == "") { continue; }
       counts[word] = counts.get(word, 0) + 1;
     }
@@ -43,9 +42,7 @@ fun countSlice(lines, start, end, out) {
 }
 
 fun merge(into, partial) {
-  const keys = partial.keys();
-  for (let i = 0; i < keys.len(); i = i + 1) {
-    const key = keys[i];
+  for (let key in partial) {
     into[key] = into.get(key, 0) + partial[key];
   }
   return into;
@@ -83,9 +80,7 @@ for (let w = 0; w < WORKERS; w = w + 1) {
   if (start >= end) { continue; }
   tasks.push(spawn countSlice(lines, start, end, results));
 }
-for (let i = 0; i < tasks.len(); i = i + 1) {
-  tasks[i].join();
-}
+for (let task in tasks) { task.join(); }
 results.close();
 
 let totals = {};
@@ -109,9 +104,8 @@ const check = chan(1);
 countSlice(lines, 0, lines.len(), check);
 const serial = check.recv();
 let matches = true;
-const serialKeys = serial.keys();
-for (let i = 0; i < serialKeys.len(); i = i + 1) {
-  if (totals.get(serialKeys[i], 0) != serial[serialKeys[i]]) { matches = false; }
+for (let key in serial) {
+  if (totals.get(key, 0) != serial[key]) { matches = false; }
 }
 print("matches a serial count: ${matches}");
 

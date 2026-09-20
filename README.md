@@ -124,13 +124,28 @@ Full reference: [docs/language.md](docs/language.md).
 let count = 0;
 const limit: Int = 10;
 
-// string interpolation
+// string interpolation and compound assignment
+count += 3;
 print("${count} of ${limit}");
 
-// arrays and maps
+// arrays and maps, walked with for-in
 const names = ["ann", "bob"];
 const ages = {"ann": 31, "bob": 25};
+for (let name in names) { print(name, ages[name]); }
 print(names.map(fun (n) { return ages[n]; }));
+
+// switch, with no fall through
+switch (count) {
+  case 1, 2: print("few");
+  case 3: print("three");
+  default: print("many");
+}
+
+// default and rest parameters
+fun join(separator = ", ", ...parts) { return parts.join(separator); }
+
+// bitwise operators on 32 bit integers, and byte level access
+print((212 << 8) | 49, chr(82), "R".code_at(0));
 
 // classes and single inheritance
 class Animal {
@@ -236,7 +251,11 @@ print(output.split("\n").len());
   [Why](docs/design.md#concurrency).
 - The collector stops the world and does not move objects.
 - Type annotations are parsed and ignored.
-- String-heavy code is slow, because every string is interned.
+- There is no compiled file format yet, so every run compiles from
+  source. That is the next milestone, and the last thing between here and
+  a self-hosted compiler. See [docs/bootstrapping.md](docs/bootstrapping.md).
+- Code that makes many distinct strings is slow, because every string is
+  interned. Reusing a small vocabulary is fast.
 - A task that is never joined is kept alive until the program ends.
 
 ## Licence

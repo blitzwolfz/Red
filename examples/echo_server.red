@@ -31,9 +31,9 @@ fun acceptLoop(server, expected) {
   }
   // Wait for every connection to finish before reporting.
   let handled = 0;
-  for (let i = 0; i < handlers.len(); i = i + 1) {
-    handlers[i].join();
-    handled = handled + 1;
+  for (let handler in handlers) {
+    handler.join();
+    handled += 1;
   }
   return handled;
 }
@@ -62,9 +62,7 @@ let clients = [];
 for (let i = 0; i < CLIENTS; i = i + 1) {
   clients.push(spawn runClient(port, "client-${i}", replies));
 }
-for (let i = 0; i < clients.len(); i = i + 1) {
-  clients[i].join();
-}
+for (let client in clients) { client.join(); }
 replies.close();
 
 let lines = [];
@@ -74,9 +72,7 @@ for (;;) {
   lines.push(line);
 }
 lines.sort();
-for (let i = 0; i < lines.len(); i = i + 1) {
-  print(lines[i]);
-}
+for (let line in lines) { print(line); }
 
 print("connections handled: ${accepting.join()}");
 server.close();

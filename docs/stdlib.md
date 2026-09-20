@@ -23,11 +23,22 @@ interleave in the middle of a line.
 | `num(value)` | A number, or `nil` when the whole string is not a number. |
 | `int(value)` | The number with its fractional part removed. |
 | `len(value)` | Length of a string, array or map. |
+| `chr(code)` | A one character string for a byte value from 0 to 255. |
 
 ```red
 print(type([]));        // array
 print(num("3.5"));      // 3.5
 print(num("3.5kg"));    // nil
+```
+
+`chr` and `code_at` are what let Red build binary data. Strings hold
+arbitrary bytes, including zero, and `write_file` writes them unchanged.
+
+```red
+let blob = "";
+for (let code in [82, 101, 100]) { blob += chr(code); }
+print(blob);                 // Red
+print(blob.bytes());         // [82, 101, 100]
 ```
 
 ## Maths
@@ -198,6 +209,8 @@ export, and [`ffi/example_ext.c`](../ffi/example_ext.c) is a working one.
 | `find(text)` | Index of the first match, or -1. |
 | `contains(text)` | Is it in there? |
 | `starts_with(text)` `ends_with(text)` | |
+| `code_at(index)` | The byte at an index, as a number. Negative counts back from the end. |
+| `bytes()` | Every byte as an array of numbers. |
 | `sub(start)` `sub(start, end)` | A slice. Negative counts back from the end. |
 | `replace(from, to)` | Every match replaced. |
 | `repeat(count)` | The string repeated. |

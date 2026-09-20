@@ -108,15 +108,23 @@ From loosest to tightest:
 
 | Level | Operators |
 |---|---|
-| assignment | `=` |
+| assignment | `=` `+=` `-=` `*=` `/=` `%=` |
 | or | `or` |
 | and | `and` |
 | equality | `==` `!=` |
 | comparison | `<` `<=` `>` `>=` |
+| bitwise or | `\|` |
+| bitwise xor | `^` |
+| bitwise and | `&` |
+| shift | `<<` `>>` |
 | term | `+` `-` |
 | factor | `*` `/` `%` |
-| unary | `!` `-` |
+| unary | `!` `-` `~` |
 | call | `()` `.` `[]` |
+
+Bitwise operators bind **tighter** than comparison, so `a & b == c` means
+`(a & b) == c`. C binds them the other way round, which surprises people,
+so Red does not copy it.
 
 `and` and `or` stop early and give back the operand that decided the
 result:
@@ -130,6 +138,31 @@ print(false and boom());     // false, boom() is never called
 or interpolation.
 
 `/` and `%` by zero raise an error rather than giving infinity.
+
+Bitwise operators work on 32 bit signed integers. A number is truncated
+towards zero and wrapped into that range first. `>>` keeps the sign, and
+a shift count is masked to 0 to 31, so shifting by 32 is defined.
+
+```red
+print(12 & 10);        // 8
+print(1 << 8);         // 256
+print(-16 >> 2);       // -4
+print(~0);             // -1
+```
+
+### Compound assignment
+
+`+=`, `-=`, `*=`, `/=` and `%=` read a target, combine it, and write it
+back. They work on variables, captured variables, fields and elements.
+The target is evaluated once.
+
+```red
+let n = 10;
+n += 5;
+counter.count *= 2;
+scores["ann"] += 1;
+items[0] -= 3;
+```
 
 Numbers, booleans, `nil` and strings compare by value. Everything else
 compares by identity:
@@ -162,8 +195,51 @@ for (;;) {
 }
 ```
 
+`for ... in` walks a collection instead of counting.
+
+```red
+for (let item in [10, 20, 30]) { print(item); }
+for (let key in ages) { print(key, ages[key]); }
+for (let letter in "abc") { print(letter); }
+```
+
+An array is walked in order. A map yields its keys, as a snapshot taken
+when the loop starts, so adding entries during the loop does not disturb
+it. A string yields its characters. Anything else is an error.
+
+The loop variable is a fresh binding on each pass, so a closure made in
+the body captures that pass's value rather than sharing one.
+
+```red
+let readers = [];
+for (let value in [1, 2, 3]) {
+  readers.push(fun () { return value; });
+}
+print(readers[0](), readers[2]());     // 1 3
+```
+
+`switch` compares a value against each case. There is no fall through,
+so a case does not need `break` to end. A case can list several values.
+The subject is evaluated once.
+
+```red
+switch (kind) {
+  case "tiger", "lion": return "ROAR";
+  case "otter": return "squeak";
+  default: return "...";
+}
+```
+
+Case values are expressions, not only literals, and they are compared
+with `==`. A `switch` with no matching case and no `default` does
+nothing. `default` must come last.
+
+Inside a loop, `break` always belongs to the loop, never to a `switch`,
+because a case never falls through.
+
 `break` leaves the loop. `continue` goes to the next step. In a `for`
-loop `continue` still runs the increment.
+loop `continue` still runs the increment. Leaving a loop from inside a
+`try` block closes that block properly.
 
 Braces are optional around a single statement, but the examples always
 use them.
@@ -188,6 +264,36 @@ print(operations["sub"](8, 3));    // 5
 ```
 
 `fun` without a name is an anonymous function.
+
+### Default and rest parameters
+
+A parameter can have a default. It is evaluated on each call, only when
+the argument was left out, and it can refer to parameters declared before
+it.
+
+```red
+fun greet(name, greeting = "Hello") {
+  return "${greeting}, ${name}";
+}
+fun box(width, height = width) { return "${width}x${height}"; }
+```
+
+Leaving an argument out is not the same as passing `nil`. A default only
+applies when the argument is absent.
+
+A required parameter cannot follow one with a default.
+
+The last parameter can be written with `...`, which gathers any further
+arguments into an array.
+
+```red
+fun total(...numbers) {
+  let sum = 0;
+  for (let n in numbers) { sum += n; }
+  return sum;
+}
+print(total(1, 2, 3));      // 6
+```
 
 ### Closures
 
@@ -427,17 +533,25 @@ funDecl        -> "fun" IDENT "(" parameters? ")" returnType? block
 varDecl        -> ( "let" | "const" ) IDENT annotation? ( "=" expression )? ";"
 importDecl     -> "import" STRING ( "as" IDENT )? ";"
 
-parameters     -> IDENT annotation? ( "," IDENT annotation? )*
+parameters     -> parameter ( "," parameter )* ( "," restParam )?
+                | restParam
+parameter      -> IDENT annotation? ( "=" expression )?
+restParam      -> "..." IDENT
 annotation     -> ":" IDENT ( "[" "]" )*
 returnType     -> "->" IDENT
 
-statement      -> exprStmt | ifStmt | whileStmt | forStmt | returnStmt
-                | breakStmt | continueStmt | tryStmt | throwStmt | block
+statement      -> exprStmt | ifStmt | whileStmt | forStmt | forInStmt
+                | switchStmt | returnStmt | breakStmt | continueStmt
+                | tryStmt | throwStmt | block
 exprStmt       -> expression ";"
 ifStmt         -> "if" "(" expression ")" statement ( "else" statement )?
 whileStmt      -> "while" "(" expression ")" statement
 forStmt        -> "for" "(" ( varDecl | exprStmt | ";" )
                         expression? ";" expression? ")" statement
+forInStmt      -> "for" "(" "let" IDENT "in" expression ")" statement
+switchStmt     -> "switch" "(" expression ")" "{" switchCase* "}"
+switchCase     -> "case" expression ( "," expression )* ":" declaration*
+                | "default" ":" declaration*
 returnStmt     -> "return" expression? ";"
 breakStmt      -> "break" ";"
 continueStmt   -> "continue" ";"
@@ -446,16 +560,21 @@ throwStmt      -> "throw" expression ";"
 block          -> "{" declaration* "}"
 
 expression     -> assignment
-assignment     -> ( call "." )? IDENT "=" assignment
-                | call "[" expression "]" "=" assignment
+assignment     -> ( call "." )? IDENT assignOp assignment
+                | call "[" expression "]" assignOp assignment
                 | logicOr
+assignOp       -> "=" | "+=" | "-=" | "*=" | "/=" | "%="
 logicOr        -> logicAnd ( "or" logicAnd )*
 logicAnd       -> equality ( "and" equality )*
 equality       -> comparison ( ( "==" | "!=" ) comparison )*
-comparison     -> term ( ( "<" | "<=" | ">" | ">=" ) term )*
+comparison     -> bitOr ( ( "<" | "<=" | ">" | ">=" ) bitOr )*
+bitOr          -> bitXor ( "|" bitXor )*
+bitXor         -> bitAnd ( "^" bitAnd )*
+bitAnd         -> shift ( "&" shift )*
+shift          -> term ( ( "<<" | ">>" ) term )*
 term           -> factor ( ( "+" | "-" ) factor )*
 factor         -> unary ( ( "*" | "/" | "%" ) unary )*
-unary          -> ( "!" | "-" ) unary | spawn
+unary          -> ( "!" | "-" | "~" ) unary | spawn
 spawn          -> "spawn" call "(" arguments? ")" | call
 call           -> primary ( "(" arguments? ")"
                           | "." IDENT
@@ -474,7 +593,8 @@ arguments      -> expression ( "," expression )*
 ## Reserved words
 
 ```
-and    as     break  catch  class  const  continue  else
-false  for    fun    if     import let    nil       or
-return spawn  super  this   throw  true   try       while
+and    as     break  case   catch  class  const  continue
+default else  false  for    fun    if     import in
+let    nil    or     return spawn  super  this   throw
+true   try    switch while
 ```

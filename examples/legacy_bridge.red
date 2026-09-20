@@ -35,8 +35,8 @@ print("  ...");
 
 // The captured output is an ordinary v2 string, so v2 can work with it.
 let roars = 0;
-for (let i = 0; i < lines.len(); i = i + 1) {
-  if (lines[i].contains("ROOOOOOAR")) { roars = roars + 1; }
+for (let line in lines) {
+  if (line.contains("ROOOOOOAR")) { roars += 1; }
 }
 print("v1 roared ${roars} times");
 
