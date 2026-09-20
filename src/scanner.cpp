@@ -17,7 +17,8 @@ const std::unordered_map<std::string, TokenType>& keywords() {
   static const std::unordered_map<std::string, TokenType> table = {
       {"and", TokenType::And},       {"as", TokenType::As},
       {"case", TokenType::Case},     {"default", TokenType::Default},
-      {"in", TokenType::In},         {"switch", TokenType::Switch},
+      {"enum", TokenType::Enum},     {"in", TokenType::In},
+      {"switch", TokenType::Switch},
       {"break", TokenType::Break},   {"catch", TokenType::Catch},
       {"class", TokenType::Class},   {"const", TokenType::Const},
       {"continue", TokenType::Continue}, {"else", TokenType::Else},

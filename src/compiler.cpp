@@ -58,6 +58,27 @@ struct LoopState {
   std::vector<int> breakJumps;
 };
 
+// A destructuring pattern, built while parsing and emitted once the
+// subject is on the stack.
+struct Pattern;
+
+struct PatternBinding {
+  enum class Source { Index, Field, Rest };
+  Source source = Source::Index;
+  // Position for Index and Rest.
+  int index = 0;
+  // Field name for Field.
+  std::string field;
+  // Name to bind, empty when this binding holds a nested pattern.
+  std::string name;
+  std::shared_ptr<Pattern> nested;
+};
+
+struct Pattern {
+  bool isArray = true;
+  std::vector<PatternBinding> bindings;
+};
+
 constexpr int kMaxLocals = 256;
 constexpr int kMaxUpvalues = 256;
 
@@ -173,7 +194,12 @@ class Compiler {
   void beginScope() { state_->scopeDepth++; }
   void endScope();
   void addLocal(const std::string& name, bool isConst);
-  void declareVariable(bool isConst);
+  // Takes the name rather than reading the last token, because patterns
+  // declare names long after the token that carried them.
+  void declareVariable(const std::string& name, bool isConst);
+  // Declares a hidden slot that user code cannot name. Hidden names carry
+  // a space so they can never collide with an identifier.
+  int addHiddenLocal(const char* name);
   int parseVariable(const char* message, bool isConst);
   // The part of parseVariable that runs once the name has been consumed.
   // for-in needs to read the name first to see whether "in" follows.
@@ -192,6 +218,7 @@ class Compiler {
   // ---- declarations and statements ----
   void declaration();
   void classDeclaration();
+  void enumDeclaration();
   void funDeclaration();
   void varDeclaration(bool isConst);
   void importDeclaration();
@@ -201,7 +228,13 @@ class Compiler {
   void ifStatement();
   void whileStatement();
   void forStatement();
-  void forInStatement(const std::string& name);
+  void forInStatement(const std::string& name,
+                      const std::shared_ptr<Pattern>& pattern);
+  std::shared_ptr<Pattern> parsePattern();
+  // Emits the bindings of a pattern, reading from the local at
+  // subjectSlot. Returns how many hidden slots it added.
+  int emitPattern(const Pattern& pattern, int subjectSlot, bool isConst);
+  void destructuringDeclaration(bool isConst);
   void switchStatement();
   void caseBody();
   void returnStatement();
@@ -296,6 +329,7 @@ void Compiler::synchronize() {
     if (previous_.type == TokenType::Semicolon) return;
     switch (current_.type) {
       case TokenType::Class:
+      case TokenType::Enum:
       case TokenType::Fun:
       case TokenType::Let:
       case TokenType::Const:
@@ -409,9 +443,8 @@ void Compiler::addLocal(const std::string& name, bool isConst) {
   }
 }
 
-void Compiler::declareVariable(bool isConst) {
+void Compiler::declareVariable(const std::string& name, bool isConst) {
   if (state_->scopeDepth == 0) return;
-  const std::string& name = previous_.lexeme;
   for (int i = (int)state_->locals.size() - 1; i >= 0; i--) {
     Local& local = state_->locals[(size_t)i];
     if (local.depth != -1 && local.depth < state_->scopeDepth) break;
@@ -428,10 +461,18 @@ int Compiler::parseVariable(const char* message, bool isConst) {
 }
 
 int Compiler::declareParsedVariable(const std::string& name, bool isConst) {
-  declareVariable(isConst);
+  declareVariable(name, isConst);
   if (state_->scopeDepth > 0) return 0;
   if (isConst) constGlobals_.insert(name);
   return identifierConstant(name);
+}
+
+int Compiler::addHiddenLocal(const char* name) {
+  addLocal(name, true);
+  // Usable straight away, including at the top level where
+  // markInitialized does nothing.
+  state_->locals.back().depth = state_->scopeDepth;
+  return (int)state_->locals.size() - 1;
 }
 
 void Compiler::markInitialized() {
@@ -562,6 +603,8 @@ std::string Compiler::typeAnnotation() {
 void Compiler::declaration() {
   if (match(TokenType::Class)) {
     classDeclaration();
+  } else if (match(TokenType::Enum)) {
+    enumDeclaration();
   } else if (match(TokenType::Fun)) {
     funDeclaration();
   } else if (match(TokenType::Let)) {
@@ -576,7 +619,127 @@ void Compiler::declaration() {
   if (panicMode_) synchronize();
 }
 
+std::shared_ptr<Pattern> Compiler::parsePattern() {
+  auto pattern = std::make_shared<Pattern>();
+
+  if (match(TokenType::LeftBracket)) {
+    pattern->isArray = true;
+    int index = 0;
+    if (!check(TokenType::RightBracket)) {
+      do {
+        if (check(TokenType::RightBracket)) break;
+        PatternBinding binding;
+        if (match(TokenType::Ellipsis)) {
+          // A rest binding takes everything left, so nothing follows it.
+          binding.source = PatternBinding::Source::Rest;
+          binding.index = index;
+          consume(TokenType::Identifier, "Expect a name after '...'.");
+          binding.name = previous_.lexeme;
+          pattern->bindings.push_back(binding);
+          break;
+        }
+        binding.source = PatternBinding::Source::Index;
+        binding.index = index++;
+        if (check(TokenType::LeftBracket) || check(TokenType::LeftBrace)) {
+          binding.nested = parsePattern();
+        } else {
+          consume(TokenType::Identifier, "Expect a name in a pattern.");
+          binding.name = previous_.lexeme;
+        }
+        pattern->bindings.push_back(binding);
+      } while (match(TokenType::Comma));
+    }
+    consume(TokenType::RightBracket, "Expect ']' after a pattern.");
+    return pattern;
+  }
+
+  consume(TokenType::LeftBrace, "Expect '[' or '{' to start a pattern.");
+  pattern->isArray = false;
+  if (!check(TokenType::RightBrace)) {
+    do {
+      if (check(TokenType::RightBrace)) break;
+      PatternBinding binding;
+      binding.source = PatternBinding::Source::Field;
+      consume(TokenType::Identifier, "Expect a field name in a pattern.");
+      binding.field = previous_.lexeme;
+      binding.name = binding.field;
+      if (match(TokenType::Colon)) {
+        if (check(TokenType::LeftBracket) || check(TokenType::LeftBrace)) {
+          binding.nested = parsePattern();
+          binding.name.clear();
+        } else {
+          consume(TokenType::Identifier, "Expect a name after ':'.");
+          binding.name = previous_.lexeme;
+        }
+      }
+      pattern->bindings.push_back(binding);
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RightBrace, "Expect '}' after a pattern.");
+  return pattern;
+}
+
+int Compiler::emitPattern(const Pattern& pattern, int subjectSlot,
+                          bool isConst) {
+  int hidden = 0;
+  for (const PatternBinding& binding : pattern.bindings) {
+    emitByte(OP_GET_LOCAL);
+    emitByte((uint8_t)subjectSlot);
+    switch (binding.source) {
+      case PatternBinding::Source::Index:
+        emitByte(OP_DESTRUCTURE_INDEX);
+        emitShort(binding.index);
+        break;
+      case PatternBinding::Source::Rest:
+        emitByte(OP_DESTRUCTURE_REST);
+        emitShort(binding.index);
+        break;
+      case PatternBinding::Source::Field:
+        emitByte(OP_DESTRUCTURE_FIELD);
+        emitShort(identifierConstant(binding.field));
+        break;
+    }
+
+    if (binding.nested != nullptr) {
+      // The extracted value becomes the subject of the inner pattern.
+      int nestedSlot = addHiddenLocal("  nested");
+      hidden++;
+      hidden += emitPattern(*binding.nested, nestedSlot, isConst);
+      continue;
+    }
+
+    int global = declareParsedVariable(binding.name, isConst);
+    defineVariable(global, isConst);
+  }
+  return hidden;
+}
+
+void Compiler::destructuringDeclaration(bool isConst) {
+  std::shared_ptr<Pattern> pattern = parsePattern();
+  consume(TokenType::Equal, "A destructuring declaration needs a value.");
+  expression();
+  consume(TokenType::Semicolon, "Expect ';' after a variable declaration.");
+
+  int subjectSlot = addHiddenLocal("  subject");
+  int hidden = emitPattern(*pattern, subjectSlot, isConst) + 1;
+
+  if (state_->scopeDepth == 0) {
+    // At the top level the bindings became globals and popped themselves,
+    // so only the hidden slots are left to clear.
+    for (int i = 0; i < hidden; i++) {
+      emitByte(OP_POP);
+      state_->locals.pop_back();
+    }
+  }
+  // Inside a scope the hidden slots are ordinary locals, and the closing
+  // brace pops them along with everything else.
+}
+
 void Compiler::varDeclaration(bool isConst) {
+  if (check(TokenType::LeftBracket) || check(TokenType::LeftBrace)) {
+    destructuringDeclaration(isConst);
+    return;
+  }
   int global = parseVariable("Expect a variable name.", isConst);
   typeAnnotation();
 
@@ -634,11 +797,63 @@ void Compiler::importDeclaration() {
   }
 }
 
+// enum Colour { Red, Green, Blue } or enum Op { Add = 1, Sub }
+//
+// The whole enum is built while compiling and stored as a single
+// constant, so declaring one costs nothing at run time.
+void Compiler::enumDeclaration() {
+  consume(TokenType::Identifier, "Expect an enum name.");
+  std::string enumName = previous_.lexeme;
+  int nameConstant = declareParsedVariable(enumName, true);
+
+  ObjEnum* enumeration = runtime_.newEnum(runtime_.internString(enumName));
+  // Rooted for the whole build, because every member allocates.
+  runtime_.pushRoot((Obj*)enumeration);
+
+  consume(TokenType::LeftBrace, "Expect '{' before enum members.");
+  double nextValue = 0;
+  while (!check(TokenType::RightBrace) && !check(TokenType::Eof)) {
+    consume(TokenType::Identifier, "Expect an enum member name.");
+    std::string memberName = previous_.lexeme;
+    double value = nextValue;
+    if (match(TokenType::Equal)) {
+      bool negative = match(TokenType::Minus);
+      consume(TokenType::Number, "Expect a number after '=' in an enum.");
+      value = negative ? -previous_.number : previous_.number;
+    }
+    nextValue = value + 1;
+
+    ObjString* interned = runtime_.internString(memberName);
+    Value existing;
+    if (enumeration->members.get(interned, &existing)) {
+      error("Duplicate enum member '" + memberName + "'.");
+    } else {
+      ObjEnumMember* member =
+          runtime_.newEnumMember(enumeration, interned, value);
+      enumeration->members.set(interned, objValue((Obj*)member));
+      enumeration->ordered.push_back(objValue((Obj*)member));
+    }
+    if (!match(TokenType::Comma)) break;
+  }
+  consume(TokenType::RightBrace, "Expect '}' after enum members.");
+
+  if (enumeration->ordered.empty()) {
+    error("An enum needs at least one member.");
+  }
+
+  emitByte(OP_CONSTANT);
+  emitShort(makeConstant(objValue((Obj*)enumeration)));
+  runtime_.popRoot();
+
+  if (state_->scopeDepth == 0) constGlobals_.insert(enumName);
+  defineVariable(nameConstant, true);
+}
+
 void Compiler::classDeclaration() {
   consume(TokenType::Identifier, "Expect a class name.");
   std::string className = previous_.lexeme;
   int nameConstant = identifierConstant(className);
-  declareVariable(false);
+  declareVariable(className, false);
 
   emitByte(OP_CLASS);
   emitShort(nameConstant);
@@ -866,12 +1081,20 @@ void Compiler::forStatement() {
   if (match(TokenType::Semicolon)) {
     // No initializer.
   } else if (match(TokenType::Let)) {
+    // A pattern here can only belong to a for-in loop.
+    if (check(TokenType::LeftBracket) || check(TokenType::LeftBrace)) {
+      std::shared_ptr<Pattern> pattern = parsePattern();
+      consume(TokenType::In, "Expect 'in' after a for-in pattern.");
+      forInStatement("", pattern);
+      endScope();
+      return;
+    }
     // The name has to be read before it is clear which kind of loop this
     // is, because "in" only shows up after it.
     consume(TokenType::Identifier, "Expect a variable name.");
     std::string name = previous_.lexeme;
     if (match(TokenType::In)) {
-      forInStatement(name);
+      forInStatement(name, nullptr);
       endScope();
       return;
     }
@@ -937,7 +1160,8 @@ void Compiler::closeLoopHandlers() {
 
 // for (let x in subject) walks an array, a map's keys, or a string's
 // characters. Two hidden locals hold the sequence and the position.
-void Compiler::forInStatement(const std::string& name) {
+void Compiler::forInStatement(const std::string& name,
+                              const std::shared_ptr<Pattern>& pattern) {
   expression();
   consume(TokenType::RightParen, "Expect ')' after a for-in subject.");
   emitByte(OP_ITER_PREP);
@@ -965,8 +1189,15 @@ void Compiler::forInStatement(const std::string& name) {
   // ITER_NEXT leaves the element on top of the stack, which is exactly
   // the slot the loop variable occupies.
   beginScope();
-  addLocal(name, false);
-  markInitialized();
+  if (pattern != nullptr) {
+    // With a pattern the element goes to a hidden slot and the pattern
+    // binds from there.
+    int itemSlot = addHiddenLocal("  item");
+    emitPattern(*pattern, itemSlot, false);
+  } else {
+    addLocal(name, false);
+    markInitialized();
+  }
   statement();
   endScope();
 
@@ -1101,20 +1332,72 @@ void Compiler::tryStatement() {
   int doneJump = emitJump(OP_JUMP);
 
   // Control arrives here with the stack cut back to its depth at
-  // TRY_BEGIN and the error value pushed on top, so the catch name lines
-  // up with a plain local slot.
+  // TRY_BEGIN and the error value pushed on top. It goes into a hidden
+  // slot so that every clause can look at the same error.
   patchJump(handlerJump);
   beginScope();
-  consume(TokenType::Catch, "Expect 'catch' after a try block.");
-  consume(TokenType::LeftParen, "Expect '(' after 'catch'.");
-  consume(TokenType::Identifier, "Expect an error variable name.");
-  addLocal(previous_.lexeme, false);
-  markInitialized();
-  consume(TokenType::RightParen, "Expect ')' after the error variable.");
-  consume(TokenType::LeftBrace, "Expect '{' before a catch block.");
-  block();
-  endScope();
+  int errorSlot = addHiddenLocal("  error");
 
+  std::vector<int> clauseDone;
+  bool sawCatchAll = false;
+  bool sawClause = false;
+
+  while (check(TokenType::Catch)) {
+    if (sawCatchAll) {
+      error("A catch clause cannot follow the one with no filter.");
+    }
+    advance();
+    sawClause = true;
+
+    consume(TokenType::LeftParen, "Expect '(' after 'catch'.");
+    consume(TokenType::Identifier, "Expect an error variable name.");
+    std::string name = previous_.lexeme;
+
+    int skipJump = -1;
+    if (match(TokenType::Colon)) {
+      // A filter is an ordinary expression, so it can be a string kind, a
+      // class, or anything that produces one.
+      emitByte(OP_GET_LOCAL);
+      emitByte((uint8_t)errorSlot);
+      expression();
+      emitByte(OP_CATCH_MATCHES);
+      skipJump = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP);
+    } else {
+      sawCatchAll = true;
+    }
+    consume(TokenType::RightParen, "Expect ')' after the error variable.");
+    consume(TokenType::LeftBrace, "Expect '{' before a catch block.");
+
+    beginScope();
+    emitByte(OP_GET_LOCAL);
+    emitByte((uint8_t)errorSlot);
+    addLocal(name, false);
+    markInitialized();
+    block();
+    endScope();
+    clauseDone.push_back(emitJump(OP_JUMP));
+
+    if (skipJump != -1) {
+      patchJump(skipJump);
+      emitByte(OP_POP);
+    }
+  }
+
+  if (!sawClause) {
+    errorAtCurrent("Expect 'catch' after a try block.");
+  }
+
+  if (!sawCatchAll) {
+    // No clause matched, so the error carries on outwards unchanged.
+    emitByte(OP_GET_LOCAL);
+    emitByte((uint8_t)errorSlot);
+    emitByte(OP_THROW);
+  }
+
+  for (int jump : clauseDone) patchJump(jump);
+  // Drops the hidden error. The ordinary path jumps past this.
+  endScope();
   patchJump(doneJump);
 }
 
@@ -1501,6 +1784,7 @@ const ParseRule* Compiler::getRule(TokenType type) {
       /* Case         */ {nullptr, nullptr, Precedence::None},
       /* Default      */ {nullptr, nullptr, Precedence::None},
       /* Ellipsis     */ {nullptr, nullptr, Precedence::None},
+      /* Enum         */ {nullptr, nullptr, Precedence::None},
       /* Error        */ {nullptr, nullptr, Precedence::None},
       /* Eof          */ {nullptr, nullptr, Precedence::None},
   };

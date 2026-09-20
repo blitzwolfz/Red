@@ -49,12 +49,15 @@ class Runtime {
   ObjArray* newArray();
   ObjMap* newMap();
   ObjModule* newModule(ObjString* name, ObjString* path);
+  ObjEnum* newEnum(ObjString* name);
+  ObjEnumMember* newEnumMember(ObjEnum* parent, ObjString* name, double value);
   ObjChannel* newChannel(size_t capacity);
   ObjTask* newTask();
   ObjFile* newFile(FILE* handle, ObjString* path);
   ObjSocket* newSocket(int fd, bool listening);
   ObjNativeLib* newNativeLib(void* handle, ObjString* path);
-  ObjError* newError(ObjString* message, ObjString* trace, Value payload);
+  ObjError* newError(ObjString* message, ObjString* trace, Value payload,
+                     ObjString* kind);
 
   // ---- garbage collection -----------------------------------------
   void collectGarbage();
@@ -91,6 +94,9 @@ class Runtime {
   // Interned names the VM needs on hot paths.
   ObjString* initString = nullptr;
   ObjString* messageString = nullptr;
+  // The kind given to an error raised by the runtime when nothing more
+  // specific fits.
+  ObjString* runtimeKind = nullptr;
 
   // Tables owned by the standard library that hold live objects. They are
   // registered here so the collector can treat them as roots without the

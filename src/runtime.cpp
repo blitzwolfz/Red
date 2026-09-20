@@ -38,6 +38,7 @@ void markTable(Runtime& rt, Table& table) {
 Runtime::Runtime() {
   initString = internString("init");
   messageString = internString("message");
+  runtimeKind = internString("runtime");
 }
 
 Runtime::~Runtime() {
@@ -158,8 +159,30 @@ ObjClass* Runtime::newClass(ObjString* name) {
   pushRoot((Obj*)name);
   ObjClass* klass = NEW_OBJECT(ObjClass, Class);
   klass->name = name;
+  klass->superclass = nullptr;
   popRoot();
   return klass;
+}
+
+ObjEnum* Runtime::newEnum(ObjString* name) {
+  pushRoot((Obj*)name);
+  ObjEnum* enumeration = NEW_OBJECT(ObjEnum, Enum);
+  enumeration->name = name;
+  popRoot();
+  return enumeration;
+}
+
+ObjEnumMember* Runtime::newEnumMember(ObjEnum* parent, ObjString* name,
+                                      double value) {
+  pushRoot((Obj*)parent);
+  pushRoot((Obj*)name);
+  ObjEnumMember* member = NEW_OBJECT(ObjEnumMember, EnumMember);
+  member->parent = parent;
+  member->name = name;
+  member->value = value;
+  popRoot();
+  popRoot();
+  return member;
 }
 
 ObjInstance* Runtime::newInstance(ObjClass* klass) {
@@ -244,14 +267,17 @@ ObjNativeLib* Runtime::newNativeLib(void* handle, ObjString* path) {
 }
 
 ObjError* Runtime::newError(ObjString* message, ObjString* trace,
-                            Value payload) {
+                            Value payload, ObjString* kind) {
   pushRoot((Obj*)message);
   pushRoot((Obj*)trace);
+  pushRoot((Obj*)(kind == nullptr ? runtimeKind : kind));
   GCRoot payloadRoot(*this, payload);
   ObjError* error = NEW_OBJECT(ObjError, Error);
   error->message = message;
   error->trace = trace;
   error->payload = payload;
+  error->kind = kind == nullptr ? runtimeKind : kind;
+  popRoot();
   popRoot();
   popRoot();
   return error;
@@ -327,6 +353,7 @@ void Runtime::markRoots() {
 
   markObject((Obj*)initString);
   markObject((Obj*)messageString);
+  markObject((Obj*)runtimeKind);
   markObject((Obj*)mainModule);
 }
 
@@ -358,7 +385,21 @@ void Runtime::blackenObject(Obj* obj) {
     case ObjType::Class: {
       ObjClass* klass = (ObjClass*)obj;
       markObject((Obj*)klass->name);
+      markObject((Obj*)klass->superclass);
       markTable(*this, klass->methods);
+      break;
+    }
+    case ObjType::Enum: {
+      ObjEnum* enumeration = (ObjEnum*)obj;
+      markObject((Obj*)enumeration->name);
+      markTable(*this, enumeration->members);
+      for (Value member : enumeration->ordered) markValue(member);
+      break;
+    }
+    case ObjType::EnumMember: {
+      ObjEnumMember* member = (ObjEnumMember*)obj;
+      markObject((Obj*)member->parent);
+      markObject((Obj*)member->name);
       break;
     }
     case ObjType::Instance: {
@@ -419,6 +460,7 @@ void Runtime::blackenObject(Obj* obj) {
       ObjError* error = (ObjError*)obj;
       markObject((Obj*)error->message);
       markObject((Obj*)error->trace);
+      markObject((Obj*)error->kind);
       markValue(error->payload);
       break;
     }
@@ -486,6 +528,14 @@ void Runtime::freeObject(Obj* obj) {
     case ObjType::Module:
       bytesAllocated -= sizeof(ObjModule);
       delete (ObjModule*)obj;
+      break;
+    case ObjType::Enum:
+      bytesAllocated -= sizeof(ObjEnum);
+      delete (ObjEnum*)obj;
+      break;
+    case ObjType::EnumMember:
+      bytesAllocated -= sizeof(ObjEnumMember);
+      delete (ObjEnumMember*)obj;
       break;
     case ObjType::Channel:
       bytesAllocated -= sizeof(ObjChannel);

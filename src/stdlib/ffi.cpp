@@ -14,23 +14,23 @@ namespace {
 
 Value nativeFfiOpen(VM& vm, int, Value* args) {
   if (!isString(args[0])) {
-    return vm.fail("ffi_open() expects a path string, got %s.",
+    return vm.failAs("type", "ffi_open() expects a path string, got %s.",
                    valueTypeName(args[0]));
   }
   ObjString* path = asString(args[0]);
   void* handle = ::dlopen(std::string(path->chars, path->length).c_str(),
                           RTLD_NOW | RTLD_LOCAL);
   if (handle == nullptr) {
-    return vm.fail("ffi_open() failed: %s", ::dlerror());
+    return vm.failAs("ffi", "ffi_open() failed: %s", ::dlerror());
   }
   return objValue((Obj*)vm.runtime().newNativeLib(handle, path));
 }
 
 Value libSym(VM& vm, int argCount, Value* args) {
   ObjNativeLib* lib = asNativeLib(args[0]);
-  if (lib->handle == nullptr) return vm.fail("sym() on a closed library.");
+  if (lib->handle == nullptr) return vm.failAs("ffi", "sym() on a closed library.");
   if (!isString(args[1])) {
-    return vm.fail("sym() expects a symbol name string.");
+    return vm.failAs("type", "sym() expects a symbol name string.");
   }
   std::string name(asString(args[1])->chars, asString(args[1])->length);
 
@@ -38,7 +38,7 @@ Value libSym(VM& vm, int argCount, Value* args) {
   void* symbol = ::dlsym(lib->handle, name.c_str());
   const char* error = ::dlerror();
   if (error != nullptr) {
-    return vm.fail("sym('%s') failed: %s", name.c_str(), error);
+    return vm.failAs("ffi", "sym('%s') failed: %s", name.c_str(), error);
   }
 
   int arity = argCount > 2 && isNumber(args[2]) ? (int)asNumber(args[2]) : -1;

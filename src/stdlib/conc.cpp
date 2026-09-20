@@ -19,7 +19,7 @@ Value nativeChan(VM& vm, int argCount, Value* args) {
   size_t capacity = 0;
   if (argCount > 0) {
     if (!isNumber(args[0]) || asNumber(args[0]) < 0) {
-      return vm.fail("chan() expects a capacity of zero or more.");
+      return vm.failAs("type", "chan() expects a capacity of zero or more.");
     }
     capacity = (size_t)asNumber(args[0]);
   }
@@ -29,7 +29,7 @@ Value nativeChan(VM& vm, int argCount, Value* args) {
 
 Value nativeSleep(VM& vm, int, Value* args) {
   if (!isNumber(args[0])) {
-    return vm.fail("sleep() expects a number, got %s.", valueTypeName(args[0]));
+    return vm.failAs("type", "sleep() expects a number, got %s.", valueTypeName(args[0]));
   }
   double seconds = asNumber(args[0]);
   if (seconds <= 0) return nilValue();
@@ -46,7 +46,7 @@ Value channelSend(VM& vm, int, Value* args) {
   ObjChannel* channel = asChannel(args[0]);
   Value value = args[1];
 
-  if (channel->closed) return vm.fail("send() on a closed channel.");
+  if (channel->closed) return vm.failAs("task", "send() on a closed channel.");
 
   if (channel->capacity == 0) {
     // Unbuffered: hand the value over, then wait until a receiver has
@@ -66,7 +66,7 @@ Value channelSend(VM& vm, int, Value* args) {
     vm.runtime().cond.wait(vm.lock());
     channel->waiters--;
   }
-  if (channel->closed) return vm.fail("send() on a closed channel.");
+  if (channel->closed) return vm.failAs("task", "send() on a closed channel.");
   channel->buffer.push_back(value);
   vm.runtime().cond.notify_all();
   return nilValue();
@@ -132,7 +132,7 @@ Value taskJoin(VM& vm, int, Value* args) {
   if (task->failed) {
     const char* message =
         task->errorMessage == nullptr ? "task failed" : task->errorMessage->chars;
-    return vm.fail("Task failed: %s", message);
+    return vm.failAs("task", "Task failed: %s", message);
   }
   return task->result;
 }

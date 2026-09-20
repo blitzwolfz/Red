@@ -64,16 +64,16 @@ namespace {
 
 Value nativeLegacy(VM& vm, int, Value* args) {
   if (!isString(args[0])) {
-    return vm.fail("legacy() expects a script path, got %s.",
+    return vm.failAs("type", "legacy() expects a script path, got %s.",
                    valueTypeName(args[0]));
   }
   std::string script(asString(args[0])->chars, asString(args[0])->length);
   if (!fileExists(script)) {
-    return vm.fail("legacy() cannot find script '%s'.", script.c_str());
+    return vm.failAs("legacy", "legacy() cannot find script '%s'.", script.c_str());
   }
   std::string command = legacyCommand(script, false);
   if (command.empty()) {
-    return vm.fail(
+    return vm.failAs("legacy", 
         "legacy() cannot find red-legacy.jar. Build it with "
         "legacy/build.sh, or set RED_LEGACY_JAR.");
   }
@@ -85,22 +85,22 @@ Value nativeLegacy(VM& vm, int, Value* args) {
   int status = std::system(command.c_str());
   vm.acquireLock();
 
-  if (status == -1) return vm.fail("legacy() could not start a process.");
+  if (status == -1) return vm.failAs("legacy", "legacy() could not start a process.");
   return numberValue((double)((status >> 8) & 0xff));
 }
 
 Value nativeLegacyOutput(VM& vm, int, Value* args) {
   if (!isString(args[0])) {
-    return vm.fail("legacy_output() expects a script path, got %s.",
+    return vm.failAs("type", "legacy_output() expects a script path, got %s.",
                    valueTypeName(args[0]));
   }
   std::string script(asString(args[0])->chars, asString(args[0])->length);
   if (!fileExists(script)) {
-    return vm.fail("legacy_output() cannot find script '%s'.", script.c_str());
+    return vm.failAs("legacy", "legacy_output() cannot find script '%s'.", script.c_str());
   }
   std::string command = legacyCommand(script, true);
   if (command.empty()) {
-    return vm.fail(
+    return vm.failAs("legacy", 
         "legacy_output() cannot find red-legacy.jar. Build it with "
         "legacy/build.sh, or set RED_LEGACY_JAR.");
   }
@@ -118,7 +118,7 @@ Value nativeLegacyOutput(VM& vm, int, Value* args) {
   }
   vm.acquireLock();
 
-  if (pipe == nullptr) return vm.fail("legacy_output() could not start java.");
+  if (pipe == nullptr) return vm.failAs("legacy", "legacy_output() could not start java.");
   return objValue((Obj*)vm.runtime().copyString(output.data(), output.size()));
 }
 

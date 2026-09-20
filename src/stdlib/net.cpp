@@ -21,13 +21,13 @@ namespace {
 
 Value nativeTcpListen(VM& vm, int argCount, Value* args) {
   if (!isNumber(args[0])) {
-    return vm.fail("tcp_listen() expects a port number.");
+    return vm.failAs("type", "tcp_listen() expects a port number.");
   }
   int port = (int)asNumber(args[0]);
   int backlog = argCount > 1 && isNumber(args[1]) ? (int)asNumber(args[1]) : 16;
 
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) return vm.fail("socket() failed: %s", std::strerror(errno));
+  if (fd < 0) return vm.failAs("net", "socket() failed: %s", std::strerror(errno));
 
   // Without this a restarted server cannot rebind while the old socket is
   // still in TIME_WAIT.
@@ -43,19 +43,19 @@ Value nativeTcpListen(VM& vm, int argCount, Value* args) {
   if (::bind(fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
     int saved = errno;
     ::close(fd);
-    return vm.fail("bind() on port %d failed: %s", port, std::strerror(saved));
+    return vm.failAs("net", "bind() on port %d failed: %s", port, std::strerror(saved));
   }
   if (::listen(fd, backlog) < 0) {
     int saved = errno;
     ::close(fd);
-    return vm.fail("listen() failed: %s", std::strerror(saved));
+    return vm.failAs("net", "listen() failed: %s", std::strerror(saved));
   }
   return objValue((Obj*)vm.runtime().newSocket(fd, true));
 }
 
 Value nativeTcpConnect(VM& vm, int, Value* args) {
   if (!isString(args[0]) || !isNumber(args[1])) {
-    return vm.fail("tcp_connect() expects a host string and a port number.");
+    return vm.failAs("type", "tcp_connect() expects a host string and a port number.");
   }
   std::string host(asString(args[0])->chars, asString(args[0])->length);
   std::string port = std::to_string((int)asNumber(args[1]));
@@ -84,11 +84,11 @@ Value nativeTcpConnect(VM& vm, int, Value* args) {
   vm.acquireLock();
 
   if (status != 0) {
-    return vm.fail("tcp_connect() could not resolve '%s': %s", host.c_str(),
+    return vm.failAs("net", "tcp_connect() could not resolve '%s': %s", host.c_str(),
                    ::gai_strerror(status));
   }
   if (fd < 0) {
-    return vm.fail("tcp_connect() to %s:%s failed: %s", host.c_str(),
+    return vm.failAs("net", "tcp_connect() to %s:%s failed: %s", host.c_str(),
                    port.c_str(), std::strerror(savedErrno));
   }
   return objValue((Obj*)vm.runtime().newSocket(fd, false));
@@ -96,7 +96,7 @@ Value nativeTcpConnect(VM& vm, int, Value* args) {
 
 bool requireOpenSocket(VM& vm, ObjSocket* socket, const char* who) {
   if (socket->closed || socket->fd < 0) {
-    vm.fail("%s on a closed socket.", who);
+    vm.failAs("net", "%s on a closed socket.", who);
     return false;
   }
   return true;
@@ -105,7 +105,7 @@ bool requireOpenSocket(VM& vm, ObjSocket* socket, const char* who) {
 Value socketAccept(VM& vm, int, Value* args) {
   ObjSocket* server = asSocket(args[0]);
   if (!requireOpenSocket(vm, server, "accept()")) return nilValue();
-  if (!server->listening) return vm.fail("accept() on a client socket.");
+  if (!server->listening) return vm.failAs("net", "accept() on a client socket.");
 
   int fd = server->fd;
   vm.releaseLock();
@@ -114,7 +114,7 @@ Value socketAccept(VM& vm, int, Value* args) {
   vm.acquireLock();
 
   if (client < 0) {
-    return vm.fail("accept() failed: %s", std::strerror(savedErrno));
+    return vm.failAs("net", "accept() failed: %s", std::strerror(savedErrno));
   }
   return objValue((Obj*)vm.runtime().newSocket(client, false));
 }
@@ -126,7 +126,7 @@ Value socketRead(VM& vm, int argCount, Value* args) {
   size_t limit = 4096;
   if (argCount > 1) {
     if (!isNumber(args[1]) || asNumber(args[1]) <= 0) {
-      return vm.fail("read() expects a positive byte count.");
+      return vm.failAs("type", "read() expects a positive byte count.");
     }
     limit = (size_t)asNumber(args[1]);
   }
@@ -139,7 +139,7 @@ Value socketRead(VM& vm, int argCount, Value* args) {
   int savedErrno = errno;
   vm.acquireLock();
 
-  if (got < 0) return vm.fail("read() failed: %s", std::strerror(savedErrno));
+  if (got < 0) return vm.failAs("net", "read() failed: %s", std::strerror(savedErrno));
   // Zero bytes means the peer closed its side, reported as nil so a read
   // loop can stop.
   if (got == 0) return nilValue();
@@ -168,7 +168,7 @@ Value socketWrite(VM& vm, int argCount, Value* args) {
   vm.acquireLock();
 
   if (sent < text.size()) {
-    return vm.fail("write() failed after %zu bytes: %s", sent,
+    return vm.failAs("net", "write() failed after %zu bytes: %s", sent,
                    std::strerror(savedErrno));
   }
   return numberValue((double)sent);
@@ -197,7 +197,7 @@ Value socketPort(VM& vm, int, Value* args) {
   struct sockaddr_in address;
   socklen_t length = sizeof(address);
   if (::getsockname(socket->fd, (struct sockaddr*)&address, &length) < 0) {
-    return vm.fail("port() failed: %s", std::strerror(errno));
+    return vm.failAs("net", "port() failed: %s", std::strerror(errno));
   }
   return numberValue((double)ntohs(address.sin_port));
 }

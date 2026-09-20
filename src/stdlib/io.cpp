@@ -11,7 +11,7 @@ namespace {
 
 ObjString* stringArg(VM& vm, Value value, const char* who) {
   if (!isString(value)) {
-    vm.fail("%s expects a string, got %s.", who, valueTypeName(value));
+    vm.failAs("type", "%s expects a string, got %s.", who, valueTypeName(value));
     return nullptr;
   }
   return asString(value);
@@ -59,7 +59,7 @@ Value nativeOpen(VM& vm, int argCount, Value* args) {
   FILE* handle =
       std::fopen(std::string(path->chars, path->length).c_str(), mode.c_str());
   if (handle == nullptr) {
-    return vm.fail("Cannot open '%s' in mode '%s'.", path->chars, mode.c_str());
+    return vm.failAs("io", "Cannot open '%s' in mode '%s'.", path->chars, mode.c_str());
   }
   return objValue((Obj*)vm.runtime().newFile(handle, path));
 }
@@ -73,7 +73,7 @@ Value nativeRemoveFile(VM& vm, int, Value* args) {
 
 bool requireOpen(VM& vm, ObjFile* file, const char* who) {
   if (!file->open || file->handle == nullptr) {
-    vm.fail("%s on a closed file.", who);
+    vm.failAs("io", "%s on a closed file.", who);
     return false;
   }
   return true;

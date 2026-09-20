@@ -153,6 +153,13 @@ size_t disassembleInstruction(const Chunk& chunk, size_t offset) {
                   offset + 5 + (size_t)jump);
       return offset + 5;
     }
+    case OP_CATCH_MATCHES: return simpleInstruction("CATCH_MATCHES", offset);
+    case OP_DESTRUCTURE_INDEX:
+      return shortInstruction("DESTRUCTURE_INDEX", chunk, offset);
+    case OP_DESTRUCTURE_REST:
+      return shortInstruction("DESTRUCTURE_REST", chunk, offset);
+    case OP_DESTRUCTURE_FIELD:
+      return constantInstruction("DESTRUCTURE_FIELD", chunk, offset);
     case OP_JUMP_IF_ARG: {
       uint8_t index = chunk.code[offset + 1];
       uint16_t jump = readShort(chunk, offset + 2);

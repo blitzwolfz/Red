@@ -66,6 +66,11 @@ class VM {
   // Reports a failure from inside a native function. Always returns nil so
   // a native can write `return vm.fail("...")`.
   Value fail(const char* format, ...);
+  // The same, tagged with a kind that a catch clause can select on.
+  Value failAs(const char* kind, const char* format, ...);
+  // Builds an error value without raising it. Natives that construct an
+  // error for the program to inspect use this.
+  Value makeError(const char* kind, const std::string& message, Value payload);
   bool failed() const { return failed_; }
 
   // Formats the active call stack, innermost frame first.
@@ -128,6 +133,7 @@ class VM {
 
   // Builds an error value and hands it to raise().
   bool runtimeError(const char* format, ...);
+  bool runtimeErrorAs(const char* kind, const char* format, ...);
   // Finds a handler for value. Returns true when execution can continue at
   // a catch block, false when the error escapes this VM.
   bool raise(Value value);

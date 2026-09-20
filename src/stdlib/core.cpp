@@ -97,6 +97,7 @@ Value nativeLen(VM& vm, int, Value* args) {
   if (isString(value)) return numberValue((double)asString(value)->length);
   if (isArray(value)) return numberValue((double)asArray(value)->items.size());
   if (isMap(value)) return numberValue((double)asMap(value)->entries.count());
+  if (isEnum(value)) return numberValue((double)asEnum(value)->ordered.size());
   return vm.fail("len() expects a string, array or map, got %s.",
                  valueTypeName(value));
 }
@@ -104,18 +105,24 @@ Value nativeLen(VM& vm, int, Value* args) {
 Value nativeAssert(VM& vm, int argCount, Value* args) {
   if (!isFalsey(args[0])) return nilValue();
   if (argCount > 1) {
-    return vm.fail("Assertion failed: %s", valueToString(args[1]).c_str());
+    return vm.failAs("assert", "Assertion failed: %s",
+                     valueToString(args[1]).c_str());
   }
-  return vm.fail("Assertion failed.");
+  return vm.failAs("assert", "Assertion failed.");
 }
 
+// error(message), error(message, payload) or error(message, payload, kind).
+// The kind defaults to "user", which is what separates a thrown error
+// from one the runtime raised.
 Value nativeError(VM& vm, int argCount, Value* args) {
-  Runtime& rt = vm.runtime();
-  ObjString* message = rt.internString(valueToString(args[0]));
-  GCRoot messageRoot(rt, (Obj*)message);
-  ObjString* trace = rt.internString(vm.buildTrace());
   Value payload = argCount > 1 ? args[1] : nilValue();
-  return objValue((Obj*)rt.newError(message, trace, payload));
+  std::string kind = "user";
+  if (argCount > 2) {
+    ObjString* given;
+    if (!wantString(vm, args[2], "error()", &given)) return nilValue();
+    kind.assign(given->chars, given->length);
+  }
+  return vm.makeError(kind.c_str(), valueToString(args[0]), payload);
 }
 
 // Turns a byte value into a one character string. This is what lets Red
@@ -494,6 +501,43 @@ Value arrayJoin(VM& vm, int argCount, Value* args) {
   return objValue((Obj*)vm.runtime().copyString(out.data(), out.size()));
 }
 
+// Compares by contents, recursively, unlike == which compares arrays and
+// maps by identity. The depth limit stops a structure that contains
+// itself from running away.
+bool deepEquals(Value a, Value b, int depth) {
+  if (depth > 64) return false;
+  if (valuesEqual(a, b)) return true;
+
+  if (isArray(a) && isArray(b)) {
+    const std::vector<Value>& left = asArray(a)->items;
+    const std::vector<Value>& right = asArray(b)->items;
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); i++) {
+      if (!deepEquals(left[i], right[i], depth + 1)) return false;
+    }
+    return true;
+  }
+
+  if (isMap(a) && isMap(b)) {
+    ObjMap* left = asMap(a);
+    ObjMap* right = asMap(b);
+    if (left->entries.count() != right->entries.count()) return false;
+    for (const ValueEntry& slot : left->entries.slots()) {
+      if (!slot.used) continue;
+      Value other;
+      if (!right->entries.get(slot.key, &other)) return false;
+      if (!deepEquals(slot.value, other, depth + 1)) return false;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+Value valueEquals(VM&, int, Value* args) {
+  return boolValue(deepEquals(args[0], args[1], 0));
+}
+
 Value arrayContains(VM&, int, Value* args) {
   for (Value item : asArray(args[0])->items) {
     if (valuesEqual(item, args[1])) return boolValue(true);
@@ -641,8 +685,11 @@ Value mapGet(VM&, int argCount, Value* args) {
 }
 
 Value mapSet(VM& vm, int, Value* args) {
-  if (isObj(args[1]) && !isString(args[1])) {
-    return vm.fail("Map keys must be strings, numbers, booleans or nil.");
+  if (!isHashableKey(args[1])) {
+    return vm.fail(
+        "A map key must be a string, number, boolean, nil or enum member, "
+        "got %s.",
+        valueTypeName(args[1]));
   }
   asMap(args[0])->entries.set(args[1], args[2]);
   return args[0];
@@ -664,6 +711,51 @@ Value mapKeys(VM& vm, int, Value* args) {
     if (slot.used) keys->items.push_back(slot.key);
   }
   return objValue((Obj*)keys);
+}
+
+// Every entry as a two element array, so that a for-in loop can take a
+// key and a value at once with a destructuring pattern.
+Value mapEntries(VM& vm, int, Value* args) {
+  Runtime& rt = vm.runtime();
+  ObjArray* entries = rt.newArray();
+  GCRoot entriesRoot(rt, (Obj*)entries);
+  for (const ValueEntry& slot : asMap(args[0])->entries.slots()) {
+    if (!slot.used) continue;
+    ObjArray* pair = rt.newArray();
+    GCRoot pairRoot(rt, (Obj*)pair);
+    pair->items.push_back(slot.key);
+    pair->items.push_back(slot.value);
+    entries->items.push_back(objValue((Obj*)pair));
+  }
+  return objValue((Obj*)entries);
+}
+
+// ---- enum methods ---------------------------------------------------
+
+Value enumValues(VM& vm, int, Value* args) {
+  ObjArray* result = vm.runtime().newArray();
+  GCRoot resultRoot(vm.runtime(), (Obj*)result);
+  result->items = asEnum(args[0])->ordered;
+  return objValue((Obj*)result);
+}
+
+// The member with a given value, or nil. Useful when a number has come
+// from outside the program, such as from a file.
+Value enumFrom(VM& vm, int, Value* args) {
+  double wanted;
+  if (!wantNumber(vm, args[1], "from()", &wanted)) return nilValue();
+  for (Value member : asEnum(args[0])->ordered) {
+    if (asEnumMember(member)->value == wanted) return member;
+  }
+  return nilValue();
+}
+
+Value enumName(VM&, int, Value* args) {
+  return objValue((Obj*)asEnum(args[0])->name);
+}
+
+Value enumLen(VM&, int, Value* args) {
+  return numberValue((double)asEnum(args[0])->ordered.size());
 }
 
 Value mapValues(VM& vm, int, Value* args) {
@@ -722,6 +814,7 @@ void installCore(Runtime& runtime) {
   defineMethodFn(runtime, ObjType::Array, "remove", arrayRemove, 2);
   defineMethodFn(runtime, ObjType::Array, "slice", arraySlice, -1);
   defineMethodFn(runtime, ObjType::Array, "join", arrayJoin, -1);
+  defineMethodFn(runtime, ObjType::Array, "equals", valueEquals, 2);
   defineMethodFn(runtime, ObjType::Array, "contains", arrayContains, 2);
   defineMethodFn(runtime, ObjType::Array, "index_of", arrayIndexOf, 2);
   defineMethodFn(runtime, ObjType::Array, "reverse", arrayReverse, 1);
@@ -738,6 +831,13 @@ void installCore(Runtime& runtime) {
   defineMethodFn(runtime, ObjType::Map, "remove", mapRemove, 2);
   defineMethodFn(runtime, ObjType::Map, "keys", mapKeys, 1);
   defineMethodFn(runtime, ObjType::Map, "values", mapValues, 1);
+  defineMethodFn(runtime, ObjType::Map, "entries", mapEntries, 1);
+  defineMethodFn(runtime, ObjType::Map, "equals", valueEquals, 2);
+
+  defineMethodFn(runtime, ObjType::Enum, "values", enumValues, 1);
+  defineMethodFn(runtime, ObjType::Enum, "from", enumFrom, 2);
+  defineMethodFn(runtime, ObjType::Enum, "name", enumName, 1);
+  defineMethodFn(runtime, ObjType::Enum, "len", enumLen, 1);
 }
 
 }  // namespace red

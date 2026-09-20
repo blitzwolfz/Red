@@ -127,17 +127,36 @@ std::string VM::buildTrace() {
   return trace;
 }
 
+Value VM::makeError(const char* kind, const std::string& text, Value payload) {
+  ObjString* message = runtime_.internString(text);
+  GCRoot messageRoot(runtime_, (Obj*)message);
+  ObjString* kindString =
+      kind == nullptr ? runtime_.runtimeKind : runtime_.internString(kind);
+  GCRoot kindRoot(runtime_, (Obj*)kindString);
+  GCRoot payloadRoot(runtime_, payload);
+  ObjString* trace = runtime_.internString(buildTrace());
+  return objValue(
+      (Obj*)runtime_.newError(message, trace, payload, kindString));
+}
+
 Value VM::fail(const char* format, ...) {
   char buffer[512];
   va_list args;
   va_start(args, format);
   std::vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
+  failValue_ = makeError(nullptr, buffer, nilValue());
+  failed_ = true;
+  return nilValue();
+}
 
-  ObjString* message = runtime_.internString(buffer);
-  GCRoot messageRoot(runtime_, (Obj*)message);
-  ObjString* trace = runtime_.internString(buildTrace());
-  failValue_ = objValue((Obj*)runtime_.newError(message, trace, nilValue()));
+Value VM::failAs(const char* kind, const char* format, ...) {
+  char buffer[512];
+  va_list args;
+  va_start(args, format);
+  std::vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+  failValue_ = makeError(kind, buffer, nilValue());
   failed_ = true;
   return nilValue();
 }
@@ -148,11 +167,16 @@ bool VM::runtimeError(const char* format, ...) {
   va_start(args, format);
   std::vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
+  return raise(makeError(nullptr, buffer, nilValue()));
+}
 
-  ObjString* message = runtime_.internString(buffer);
-  GCRoot messageRoot(runtime_, (Obj*)message);
-  ObjString* trace = runtime_.internString(buildTrace());
-  return raise(objValue((Obj*)runtime_.newError(message, trace, nilValue())));
+bool VM::runtimeErrorAs(const char* kind, const char* format, ...) {
+  char buffer[512];
+  va_list args;
+  va_start(args, format);
+  std::vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+  return raise(makeError(kind, buffer, nilValue()));
 }
 
 bool VM::raise(Value value) {
@@ -190,25 +214,30 @@ bool VM::call(ObjClosure* closure, int argCount) {
   if (argCount < function->arity ||
       (!function->hasRest && argCount > function->maxArity)) {
     if (function->hasRest) {
-      return runtimeError("Expected at least %d argument%s but got %d.",
-                          function->arity, plural(function->arity), argCount);
+      return runtimeErrorAs("arity",
+                            "Expected at least %d argument%s but got %d.",
+                            function->arity, plural(function->arity),
+                            argCount);
     }
     if (function->arity == function->maxArity) {
-      return runtimeError("Expected %d argument%s but got %d.", function->arity,
-                          plural(function->arity), argCount);
+      return runtimeErrorAs("arity", "Expected %d argument%s but got %d.",
+                            function->arity, plural(function->arity),
+                            argCount);
     }
-    return runtimeError("Expected between %d and %d arguments but got %d.",
-                        function->arity, function->maxArity, argCount);
+    return runtimeErrorAs("arity",
+                          "Expected between %d and %d arguments but got %d.",
+                          function->arity, function->maxArity, argCount);
   }
   if (frameCount_ == kMaxFrames) {
-    return runtimeError("Stack overflow: call depth exceeded %d frames.",
-                        kMaxFrames);
+    return runtimeErrorAs("overflow",
+                          "Stack overflow: call depth exceeded %d frames.",
+                          kMaxFrames);
   }
   // A frame can be far wider than the average, so depth on its own is not
   // a safe bound. Check the room this callee can actually need.
   if (stackTop_ + closure->function->slotCount > stack_ + kMaxStack) {
-    return runtimeError(
-        "Stack overflow: %s needs %d slots and only %ld are left.",
+    return runtimeErrorAs(
+        "overflow", "Stack overflow: %s needs %d slots and only %ld are left.",
         closure->function->name == nullptr
             ? "<script>"
             : closure->function->name->chars,
@@ -270,9 +299,9 @@ bool VM::callValue(Value callee, int argCount) {
       case ObjType::Native: {
         ObjNative* native = asNative(callee);
         if (native->arity >= 0 && native->arity != argCount) {
-          return runtimeError("%s() expected %d argument%s but got %d.",
-                              native->name->chars, native->arity,
-                              plural(native->arity), argCount);
+          return runtimeErrorAs("arity", "%s() expected %d argument%s but got %d.",
+                                native->name->chars, native->arity,
+                                plural(native->arity), argCount);
         }
         Value result =
             native->foreign != nullptr
@@ -293,15 +322,15 @@ bool VM::callValue(Value callee, int argCount) {
         break;
     }
   }
-  return runtimeError("Can only call functions and classes, got %s.",
-                      valueTypeName(callee));
+  return runtimeErrorAs("type", "Can only call functions and classes, got %s.",
+                        valueTypeName(callee));
 }
 
 bool VM::bindMethod(ObjClass* klass, ObjString* name) {
   Value method;
   if (!klass->methods.get(name, &method)) {
-    return runtimeError("Undefined property '%s' on %s.", name->chars,
-                        klass->name->chars);
+    return runtimeErrorAs("name", "Undefined property '%s' on %s.",
+                          name->chars, klass->name->chars);
   }
   ObjBoundMethod* bound = runtime_.newBoundMethod(peek(0), method);
   pop();
@@ -322,8 +351,8 @@ bool VM::getBuiltinProperty(Value receiver, ObjString* name) {
 bool VM::invokeFromClass(ObjClass* klass, ObjString* name, int argCount) {
   Value method;
   if (!klass->methods.get(name, &method)) {
-    return runtimeError("Undefined method '%s' on %s.", name->chars,
-                        klass->name->chars);
+    return runtimeErrorAs("name", "Undefined method '%s' on %s.",
+                          name->chars, klass->name->chars);
   }
   return call(asClosure(method), argCount);
 }
@@ -345,10 +374,19 @@ bool VM::invoke(ObjString* name, int argCount) {
   if (isObjType(receiver, ObjType::Module)) {
     Value function;
     if (!asModule(receiver)->globals.get(name, &function)) {
-      return runtimeError("Undefined name '%s' in module.", name->chars);
+      return runtimeErrorAs("name", "Undefined name '%s' in module.",
+                            name->chars);
     }
     stackTop_[-argCount - 1] = function;
     return callValue(function, argCount);
+  }
+
+  if (isEnum(receiver)) {
+    Value member;
+    if (asEnum(receiver)->members.get(name, &member)) {
+      stackTop_[-argCount - 1] = member;
+      return callValue(member, argCount);
+    }
   }
 
   // Runtime provided methods take the receiver as their first argument,
@@ -356,9 +394,9 @@ bool VM::invoke(ObjString* name, int argCount) {
   ObjNative* method = lookupBuiltinMethod(runtime_, receiver, name);
   if (method != nullptr) {
     if (method->arity >= 0 && method->arity != argCount + 1) {
-      return runtimeError("%s() expected %d argument%s but got %d.",
-                          method->name->chars, method->arity - 1,
-                          plural(method->arity - 1), argCount);
+      return runtimeErrorAs("arity", "%s() expected %d argument%s but got %d.",
+                            method->name->chars, method->arity - 1,
+                            plural(method->arity - 1), argCount);
     }
     Value result =
         method->foreign != nullptr
@@ -379,8 +417,8 @@ bool VM::invoke(ObjString* name, int argCount) {
   if (isClass(receiver)) {
     return runtimeError("Undefined static method '%s'.", name->chars);
   }
-  return runtimeError("Type %s has no method '%s'.", valueTypeName(receiver),
-                      name->chars);
+  return runtimeErrorAs("name", "Type %s has no method '%s'.",
+                        valueTypeName(receiver), name->chars);
 }
 
 ObjUpvalue* VM::captureUpvalue(Value* local) {
@@ -444,8 +482,8 @@ bool VM::getIndex() {
 
   if (isArray(target)) {
     if (!isNumber(indexValue)) {
-      return runtimeError("Array index must be a number, got %s.",
-                          valueTypeName(indexValue));
+      return runtimeErrorAs("type", "Array index must be a number, got %s.",
+                            valueTypeName(indexValue));
     }
     ObjArray* array = asArray(target);
     double raw = asNumber(indexValue);
@@ -454,8 +492,9 @@ bool VM::getIndex() {
     // len(a) - 1 everywhere.
     if (index < 0) index += (long)array->items.size();
     if (index < 0 || index >= (long)array->items.size()) {
-      return runtimeError("Array index %ld out of range for length %zu.",
-                          (long)raw, array->items.size());
+      return runtimeErrorAs("index",
+                            "Array index %ld out of range for length %zu.",
+                            (long)raw, array->items.size());
     }
     Value result = array->items[(size_t)index];
     pop();
@@ -475,15 +514,16 @@ bool VM::getIndex() {
 
   if (isString(target)) {
     if (!isNumber(indexValue)) {
-      return runtimeError("String index must be a number, got %s.",
-                          valueTypeName(indexValue));
+      return runtimeErrorAs("type", "String index must be a number, got %s.",
+                            valueTypeName(indexValue));
     }
     ObjString* string = asString(target);
     long index = (long)asNumber(indexValue);
     if (index < 0) index += (long)string->length;
     if (index < 0 || index >= (long)string->length) {
-      return runtimeError("String index out of range for length %zu.",
-                          string->length);
+      return runtimeErrorAs("index",
+                            "String index out of range for length %zu.",
+                            string->length);
     }
     ObjString* result = runtime_.copyString(string->chars + index, 1);
     pop();
@@ -492,8 +532,8 @@ bool VM::getIndex() {
     return true;
   }
 
-  return runtimeError("Cannot index a value of type %s.",
-                      valueTypeName(target));
+  return runtimeErrorAs("type", "Cannot index a value of type %s.",
+                        valueTypeName(target));
 }
 
 bool VM::setIndex() {
@@ -503,25 +543,31 @@ bool VM::setIndex() {
 
   if (isArray(target)) {
     if (!isNumber(indexValue)) {
-      return runtimeError("Array index must be a number, got %s.",
-                          valueTypeName(indexValue));
+      return runtimeErrorAs("type", "Array index must be a number, got %s.",
+                            valueTypeName(indexValue));
     }
     ObjArray* array = asArray(target);
     long index = (long)asNumber(indexValue);
     if (index < 0) index += (long)array->items.size();
     if (index < 0 || index >= (long)array->items.size()) {
-      return runtimeError("Array index %ld out of range for length %zu.",
-                          index, array->items.size());
+      return runtimeErrorAs("index",
+                            "Array index %ld out of range for length %zu.",
+                            index, array->items.size());
     }
     array->items[(size_t)index] = value;
   } else if (isMap(target)) {
-    if (isObj(indexValue) && !isString(indexValue)) {
-      return runtimeError("Map keys must be strings, numbers, booleans or nil.");
+    if (!isHashableKey(indexValue)) {
+      return runtimeErrorAs(
+          "key",
+          "A map key must be a string, number, boolean, nil or enum member, "
+          "got %s.",
+          valueTypeName(indexValue));
     }
     asMap(target)->entries.set(indexValue, value);
   } else {
-    return runtimeError("Cannot assign by index into a value of type %s.",
-                        valueTypeName(target));
+    return runtimeErrorAs("type",
+                          "Cannot assign by index into a value of type %s.",
+                          valueTypeName(target));
   }
 
   pop();
@@ -594,7 +640,8 @@ bool VM::importModule(ObjString* path) {
 
   std::string source;
   if (!readFile(resolved, &source)) {
-    return runtimeError("Cannot open module '%s'.", resolved.c_str());
+    return runtimeErrorAs("import", "Cannot open module '%s'.",
+                          resolved.c_str());
   }
 
   std::string name = resolved.substr(resolved.find_last_of('/') + 1);
@@ -610,7 +657,8 @@ bool VM::importModule(ObjString* path) {
   ObjFunction* function = compile(runtime_, source, module);
   if (function == nullptr) {
     runtime_.modules.remove(key);
-    return runtimeError("Module '%s' failed to compile.", resolved.c_str());
+    return runtimeErrorAs("import", "Module '%s' failed to compile.",
+                          resolved.c_str());
   }
 
   // callAndRun expects the callee to be on the stack already, the same
@@ -653,6 +701,13 @@ InterpretResult VM::run(int baseFrame) {
 #define FAULT(...)                                                   \
   {                                                                  \
     if (!runtimeError(__VA_ARGS__)) RETURN_WITH(InterpretResult::RuntimeError) \
+    frame = &frames_[frameCount_ - 1];                               \
+    break;                                                           \
+  }
+#define FAULT_AS(kind, ...)                                          \
+  {                                                                  \
+    if (!runtimeErrorAs(kind, __VA_ARGS__))                          \
+      RETURN_WITH(InterpretResult::RuntimeError)                     \
     frame = &frames_[frameCount_ - 1];                               \
     break;                                                           \
   }
@@ -710,7 +765,7 @@ InterpretResult VM::run(int baseFrame) {
         } else if (runtime_.builtins.get(name, &value)) {
           push(value);
         } else {
-          FAULT("Undefined variable '%s'.", name->chars)
+          FAULT_AS("name", "Undefined variable '%s'.", name->chars)
         }
         break;
       }
@@ -726,7 +781,7 @@ InterpretResult VM::run(int baseFrame) {
           // set() reports that the key was new, which means the program
           // assigned to something it never declared.
           currentModule()->globals.remove(name);
-          FAULT("Undefined variable '%s'.", name->chars)
+          FAULT_AS("name", "Undefined variable '%s'.", name->chars)
         }
         break;
       }
@@ -755,7 +810,7 @@ InterpretResult VM::run(int baseFrame) {
         if (isObjType(receiver, ObjType::Module)) {
           Value value;
           if (!asModule(receiver)->globals.get(name, &value)) {
-            FAULT("Undefined name '%s' in module.", name->chars)
+            FAULT_AS("name", "Undefined name '%s' in module.", name->chars)
           }
           pop();
           push(value);
@@ -774,23 +829,63 @@ InterpretResult VM::run(int baseFrame) {
             push(objValue((Obj*)error->trace));
             break;
           }
+          if (field == "kind") {
+            pop();
+            push(objValue((Obj*)error->kind));
+            break;
+          }
           if (field == "payload") {
             pop();
             push(error->payload);
             break;
           }
         }
+        if (isEnum(receiver)) {
+          Value member;
+          if (asEnum(receiver)->members.get(name, &member)) {
+            pop();
+            push(member);
+            break;
+          }
+          // values() and from() are provided as methods, so fall through
+          // to the built-in method lookup before reporting.
+          if (lookupBuiltinMethod(runtime_, receiver, name) == nullptr) {
+            FAULT_AS("name", "Enum %s has no member '%s'.",
+                     asEnum(receiver)->name->chars, name->chars)
+          }
+        }
+        if (isEnumMember(receiver)) {
+          ObjEnumMember* member = asEnumMember(receiver);
+          std::string field(name->chars, name->length);
+          if (field == "name") {
+            pop();
+            push(objValue((Obj*)member->name));
+            break;
+          }
+          if (field == "value") {
+            pop();
+            push(numberValue(member->value));
+            break;
+          }
+          // Not called "enum", because that is a keyword and so could
+          // never be written after a dot.
+          if (field == "owner") {
+            pop();
+            push(objValue((Obj*)member->parent));
+            break;
+          }
+        }
         if (getBuiltinProperty(receiver, name)) break;
-        FAULT("Type %s has no property '%s'.", valueTypeName(receiver),
-              name->chars)
+        FAULT_AS("name", "Type %s has no property '%s'.",
+                 valueTypeName(receiver), name->chars)
       }
 
       case OP_SET_PROPERTY: {
         Value receiver = peek(1);
         ObjString* name = READ_STRING();
         if (!isInstance(receiver)) {
-          FAULT("Only instances have assignable fields, got %s.",
-                valueTypeName(receiver))
+          FAULT_AS("type", "Only instances have assignable fields, got %s.",
+                   valueTypeName(receiver))
         }
         asInstance(receiver)->fields.set(name, peek(0));
         Value value = pop();
@@ -839,8 +934,9 @@ InterpretResult VM::run(int baseFrame) {
           break;
         }
         if (!isNumber(peek(0)) || !isNumber(peek(1))) {
-          FAULT("Comparison needs two numbers or two strings, got %s and %s.",
-                valueTypeName(peek(1)), valueTypeName(peek(0)))
+          FAULT_AS("type",
+                   "Comparison needs two numbers or two strings, got %s and %s.",
+                   valueTypeName(peek(1)), valueTypeName(peek(0)))
         }
         double b = asNumber(pop());
         double a = asNumber(pop());
@@ -863,8 +959,8 @@ InterpretResult VM::run(int baseFrame) {
           push(numberValue(a + b));
           break;
         }
-        FAULT("Cannot add %s and %s.", valueTypeName(peek(1)),
-              valueTypeName(peek(0)))
+        FAULT_AS("type", "Cannot add %s and %s.", valueTypeName(peek(1)),
+                 valueTypeName(peek(0)))
       }
 
       case OP_SUBTRACT:
@@ -872,13 +968,13 @@ InterpretResult VM::run(int baseFrame) {
       case OP_DIVIDE:
       case OP_MODULO: {
         if (!isNumber(peek(0)) || !isNumber(peek(1))) {
-          FAULT("Arithmetic needs two numbers, got %s and %s.",
-                valueTypeName(peek(1)), valueTypeName(peek(0)))
+          FAULT_AS("type", "Arithmetic needs two numbers, got %s and %s.",
+                   valueTypeName(peek(1)), valueTypeName(peek(0)))
         }
         double b = asNumber(peek(0));
         double a = asNumber(peek(1));
         if ((instruction == OP_DIVIDE || instruction == OP_MODULO) && b == 0) {
-          FAULT("Division by zero.")
+          FAULT_AS("zero-division", "Division by zero.")
         }
         pop();
         pop();
@@ -893,7 +989,8 @@ InterpretResult VM::run(int baseFrame) {
 
       case OP_NEGATE: {
         if (!isNumber(peek(0))) {
-          FAULT("Cannot negate a value of type %s.", valueTypeName(peek(0)))
+          FAULT_AS("type", "Cannot negate a value of type %s.",
+                   valueTypeName(peek(0)))
         }
         push(numberValue(-asNumber(pop())));
         break;
@@ -906,8 +1003,8 @@ InterpretResult VM::run(int baseFrame) {
       case OP_SHIFT_LEFT:
       case OP_SHIFT_RIGHT: {
         if (!isNumber(peek(0)) || !isNumber(peek(1))) {
-          FAULT("Bitwise operators need two numbers, got %s and %s.",
-                valueTypeName(peek(1)), valueTypeName(peek(0)))
+          FAULT_AS("type", "Bitwise operators need two numbers, got %s and %s.",
+                   valueTypeName(peek(1)), valueTypeName(peek(0)))
         }
         int32_t right = toInt32(asNumber(pop()));
         int32_t left = toInt32(asNumber(pop()));
@@ -928,8 +1025,8 @@ InterpretResult VM::run(int baseFrame) {
       }
       case OP_BIT_NOT: {
         if (!isNumber(peek(0))) {
-          FAULT("Cannot apply '~' to a value of type %s.",
-                valueTypeName(peek(0)))
+          FAULT_AS("type", "Cannot apply '~' to a value of type %s.",
+                   valueTypeName(peek(0)))
         }
         push(numberValue((double)~toInt32(asNumber(pop()))));
         break;
@@ -1020,11 +1117,14 @@ InterpretResult VM::run(int baseFrame) {
       case OP_INHERIT: {
         Value superclass = peek(1);
         if (!isClass(superclass)) {
-          FAULT("A superclass must be a class, got %s.",
-                valueTypeName(superclass))
+          FAULT_AS("type", "A superclass must be a class, got %s.",
+                   valueTypeName(superclass))
         }
         // Copy down rather than chain at lookup time. Method dispatch then
-        // costs one table probe no matter how deep the hierarchy is.
+        // costs one table probe no matter how deep the hierarchy is. The
+        // link is still kept, so a value can be tested against a whole
+        // hierarchy.
+        asClass(peek(0))->superclass = asClass(superclass);
         asClass(peek(0))->methods.addAll(asClass(superclass)->methods);
         pop();
         break;
@@ -1047,14 +1147,15 @@ InterpretResult VM::run(int baseFrame) {
         bool badKey = false;
         for (uint16_t i = 0; i < count; i++) {
           Value* pair = stackTop_ - (count - i) * 2;
-          if (isObj(pair[0]) && !isString(pair[0])) {
+          if (!isHashableKey(pair[0])) {
             badKey = true;
             break;
           }
           map->entries.set(pair[0], pair[1]);
         }
         if (badKey) {
-          FAULT("Map keys must be strings, numbers, booleans or nil.")
+          FAULT("A map key must be a string, number, boolean, nil or enum "
+                "member.")
         }
         stackTop_ -= count * 2;
         push(objValue((Obj*)map));
@@ -1075,13 +1176,24 @@ InterpretResult VM::run(int baseFrame) {
       case OP_THROW: {
         Value thrown = pop();
         if (!isError(thrown)) {
-          // Anything can be thrown. Non-error values are wrapped so that
-          // catch always receives something with a message and a trace.
+          // Anything can be thrown. A value that is not already an error
+          // is wrapped, so catch always receives something with a
+          // message, a trace and a kind.
           GCRoot thrownRoot(runtime_, thrown);
-          ObjString* message = runtime_.internString(valueToString(thrown));
-          GCRoot messageRoot(runtime_, (Obj*)message);
-          ObjString* trace = runtime_.internString(buildTrace());
-          thrown = objValue((Obj*)runtime_.newError(message, trace, thrown));
+          std::string kind = "user";
+          std::string message = valueToString(thrown);
+          if (isInstance(thrown)) {
+            // An instance takes its class name as its kind, which is what
+            // lets `catch (e: ParseError)` work.
+            ObjInstance* instance = asInstance(thrown);
+            kind.assign(instance->klass->name->chars,
+                        instance->klass->name->length);
+            Value stored;
+            if (instance->fields.get(runtime_.messageString, &stored)) {
+              message = valueToString(stored);
+            }
+          }
+          thrown = makeError(kind.c_str(), message, thrown);
         }
         if (!raise(thrown)) RETURN_WITH(InterpretResult::RuntimeError)
         frame = &frames_[frameCount_ - 1];
@@ -1127,7 +1239,8 @@ InterpretResult VM::run(int baseFrame) {
           push(objValue((Obj*)characters));
           break;
         }
-        FAULT("Cannot walk a value of type %s.", valueTypeName(subject))
+        FAULT_AS("type", "Cannot walk a value of type %s.",
+                 valueTypeName(subject))
       }
 
       case OP_ITER_NEXT: {
@@ -1147,6 +1260,103 @@ InterpretResult VM::run(int baseFrame) {
         break;
       }
 
+      case OP_CATCH_MATCHES: {
+        // Both operands are consumed. The compiler pushes a copy of the
+        // error for each clause precisely so this can take it.
+        Value filter = pop();
+        Value caught = pop();
+        ObjError* error = asError(caught);
+        if (isString(filter)) {
+          // Kinds are interned, so this is a pointer compare.
+          push(boolValue(error->kind == asString(filter)));
+          break;
+        }
+        if (isClass(filter)) {
+          bool matches = false;
+          if (isInstance(error->payload)) {
+            for (ObjClass* klass = asInstance(error->payload)->klass;
+                 klass != nullptr; klass = klass->superclass) {
+              if (klass == asClass(filter)) {
+                matches = true;
+                break;
+              }
+            }
+          }
+          push(boolValue(matches));
+          break;
+        }
+        FAULT_AS("type",
+                 "A catch filter must be a string or a class, got %s.",
+                 valueTypeName(filter))
+      }
+
+      case OP_DESTRUCTURE_INDEX: {
+        uint16_t index = READ_SHORT();
+        Value subject = peek(0);
+        Value result = nilValue();
+        if (isArray(subject)) {
+          ObjArray* array = asArray(subject);
+          if (index < array->items.size()) result = array->items[index];
+        } else if (isString(subject)) {
+          ObjString* text = asString(subject);
+          if (index < text->length) {
+            result =
+                objValue((Obj*)runtime_.copyString(text->chars + index, 1));
+          }
+        } else {
+          FAULT_AS("type", "Cannot take elements from a value of type %s.",
+                   valueTypeName(subject))
+        }
+        pop();
+        push(result);
+        break;
+      }
+
+      case OP_DESTRUCTURE_REST: {
+        uint16_t index = READ_SHORT();
+        Value subject = peek(0);
+        if (!isArray(subject)) {
+          FAULT_AS("type", "A rest pattern needs an array, got %s.",
+                   valueTypeName(subject))
+        }
+        ObjArray* rest = runtime_.newArray();
+        GCRoot restRoot(runtime_, (Obj*)rest);
+        ObjArray* source = asArray(subject);
+        if (index < source->items.size()) {
+          rest->items.assign(source->items.begin() + index,
+                             source->items.end());
+        }
+        pop();
+        push(objValue((Obj*)rest));
+        break;
+      }
+
+      case OP_DESTRUCTURE_FIELD: {
+        ObjString* name = READ_STRING();
+        Value subject = peek(0);
+        Value result = nilValue();
+        if (isMap(subject)) {
+          asMap(subject)->entries.get(objValue((Obj*)name), &result);
+        } else if (isInstance(subject)) {
+          asInstance(subject)->fields.get(name, &result);
+        } else if (isObjType(subject, ObjType::Module)) {
+          if (!asModule(subject)->globals.get(name, &result)) {
+            FAULT_AS("name", "Module has no name '%s'.", name->chars)
+          }
+        } else if (isEnum(subject)) {
+          if (!asEnum(subject)->members.get(name, &result)) {
+            FAULT_AS("name", "Enum %s has no member '%s'.",
+                     asEnum(subject)->name->chars, name->chars)
+          }
+        } else {
+          FAULT_AS("type", "Cannot take fields from a value of type %s.",
+                   valueTypeName(subject))
+        }
+        pop();
+        push(result);
+        break;
+      }
+
       case OP_JUMP_IF_ARG: {
         uint8_t index = READ_BYTE();
         uint16_t offset = READ_SHORT();
@@ -1160,6 +1370,7 @@ InterpretResult VM::run(int baseFrame) {
   }
 
 #undef CHECK
+#undef FAULT_AS
 #undef FAULT
 #undef RETURN_WITH
 #undef READ_STRING

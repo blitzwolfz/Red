@@ -34,6 +34,8 @@ enum class ObjType : uint8_t {
   Array,
   Map,
   Module,
+  Enum,
+  EnumMember,
   Channel,
   Task,
   File,
@@ -131,6 +133,10 @@ struct ObjClosure {
 struct ObjClass {
   Obj obj;
   ObjString* name;
+  // Kept so that a value can be tested against a whole hierarchy. Method
+  // lookup does not use it, because methods are copied down at the point
+  // of inheritance.
+  ObjClass* superclass;
   Table methods;
 };
 
@@ -208,6 +214,25 @@ struct ObjNativeLib {
   ObjString* path;
 };
 
+// A set of named constants. Members are built once, when the enum is
+// declared, and every mention of one yields the same object, so they
+// compare by identity and can be used as map keys.
+struct ObjEnum {
+  Obj obj;
+  ObjString* name;
+  // Name to member.
+  Table members;
+  // Members in declaration order, which is what values() reports.
+  std::vector<Value> ordered;
+};
+
+struct ObjEnumMember {
+  Obj obj;
+  ObjEnum* parent;
+  ObjString* name;
+  double value;
+};
+
 // The value produced by a runtime fault and by throw. Carrying a dedicated
 // type rather than a plain instance keeps the VM's unwind path free of
 // user visible class lookups.
@@ -218,6 +243,10 @@ struct ObjError {
   ObjString* trace;
   // Arbitrary user payload attached by throw.
   Value payload;
+  // What sort of failure this is, so that a catch clause can select. The
+  // runtime uses a fixed set of names, listed in docs/language.md. A
+  // thrown class instance takes that class's name.
+  ObjString* kind;
 };
 
 inline ObjString* asString(Value v) { return (ObjString*)asObj(v); }
@@ -235,6 +264,10 @@ inline ObjTask* asTask(Value v) { return (ObjTask*)asObj(v); }
 inline ObjFile* asFile(Value v) { return (ObjFile*)asObj(v); }
 inline ObjSocket* asSocket(Value v) { return (ObjSocket*)asObj(v); }
 inline ObjNativeLib* asNativeLib(Value v) { return (ObjNativeLib*)asObj(v); }
+inline ObjEnum* asEnum(Value v) { return (ObjEnum*)asObj(v); }
+inline ObjEnumMember* asEnumMember(Value v) {
+  return (ObjEnumMember*)asObj(v);
+}
 inline ObjError* asError(Value v) { return (ObjError*)asObj(v); }
 
 inline bool isString(Value v) { return isObjType(v, ObjType::String); }
@@ -247,7 +280,15 @@ inline bool isChannel(Value v) { return isObjType(v, ObjType::Channel); }
 inline bool isTask(Value v) { return isObjType(v, ObjType::Task); }
 inline bool isFile(Value v) { return isObjType(v, ObjType::File); }
 inline bool isSocket(Value v) { return isObjType(v, ObjType::Socket); }
+inline bool isEnum(Value v) { return isObjType(v, ObjType::Enum); }
+inline bool isEnumMember(Value v) { return isObjType(v, ObjType::EnumMember); }
 inline bool isError(Value v) { return isObjType(v, ObjType::Error); }
+
+// Values allowed as map keys. Everything here either compares by value or
+// is a unique object that never changes.
+inline bool isHashableKey(Value v) {
+  return !isObj(v) || isString(v) || isEnumMember(v);
+}
 
 std::string objectToString(Obj* obj, bool quoteStrings);
 const char* objectTypeName(Obj* obj);

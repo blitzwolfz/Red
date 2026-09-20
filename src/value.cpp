@@ -107,6 +107,17 @@ std::string objectString(Obj* obj, bool quoteStrings, int depth) {
       ObjModule* m = (ObjModule*)obj;
       return "<module " + std::string(m->name->chars, m->name->length) + ">";
     }
+    case ObjType::Enum: {
+      ObjEnum* e = (ObjEnum*)obj;
+      return "<enum " + std::string(e->name->chars, e->name->length) + ">";
+    }
+    case ObjType::EnumMember: {
+      // Printing the enum name too is the whole point: a bare number
+      // tells a reader nothing when something goes wrong.
+      ObjEnumMember* m = (ObjEnumMember*)obj;
+      return std::string(m->parent->name->chars, m->parent->name->length) +
+             "." + std::string(m->name->chars, m->name->length);
+    }
     case ObjType::Channel: {
       ObjChannel* c = (ObjChannel*)obj;
       return "<channel " + std::to_string(c->buffer.size()) + "/" +
@@ -214,6 +225,8 @@ const char* objectTypeName(Obj* obj) {
     case ObjType::Array: return "array";
     case ObjType::Map: return "map";
     case ObjType::Module: return "module";
+    case ObjType::Enum: return "enum";
+    case ObjType::EnumMember: return "enum member";
     case ObjType::Channel: return "channel";
     case ObjType::Task: return "task";
     case ObjType::File: return "file";

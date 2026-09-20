@@ -92,6 +92,18 @@ enum OpCode : uint8_t {
   // Jumps when the argument at the given index was actually passed. Used
   // to skip over a parameter's default value.
   OP_JUMP_IF_ARG,
+  // Tests a caught error against a catch clause's filter.
+  OP_CATCH_MATCHES,
+  // Reads an element for a destructuring pattern. A position past the
+  // end gives nil, because a pattern is allowed to be longer than what
+  // it is matched against.
+  OP_DESTRUCTURE_INDEX,
+  // Gathers the elements from a position onwards into a new array.
+  OP_DESTRUCTURE_REST,
+  // Reads a named field for a destructuring pattern. Unlike GET_PROPERTY
+  // this never finds a method, so a pattern cannot pick one up by
+  // accident, and a missing field gives nil rather than failing.
+  OP_DESTRUCTURE_FIELD,
 };
 
 // Source lines are stored as runs rather than one int per byte. Straight
