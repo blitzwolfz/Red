@@ -1,0 +1,95 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The JDK is optional. It is here so the legacy bridge is covered
+      # too, rather than skipped.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Version
+        run: ./build/red version
+
+      - name: Tests
+        run: python3 tests/run.py --red build/red --tests tests
+
+      # Collect before every allocation. This is what catches a missing
+      # root, which otherwise shows up rarely and at random.
+      - name: Tests under GC stress
+        run: python3 tests/run.py --red build/red --tests tests --gc-stress
+
+      - name: Examples
+        run: |
+          ./build/red examples/tour.red
+          ./build/red examples/echo_server.red
+          ./build/red examples/word_count.red
+          ./build/red examples/legacy_bridge.red
+
+      - name: Disassembler
+        run: ./build/red disasm examples/tiny.red
+
+      - name: Legacy interpreter
+        run: ./build/red legacy legacy/main.red
+
+      - name: Benchmarks
+        run: ./build/red bench
+
+  sanitizers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Configure with address and undefined behaviour sanitizers
+        run: cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DRED_SANITIZE=ON
+
+      - name: Build
+        run: cmake --build build-asan -j
+
+      - name: Tests under sanitizers and GC stress
+        run: |
+          python3 tests/run.py --red build-asan/red --tests tests --gc-stress
+
+      - name: Configure with the thread sanitizer
+        run: |
+          cmake -B build-tsan -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS=-fsanitize=thread \
+            -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread
+
+      - name: Build
+        run: cmake --build build-tsan --target red -j
+
+      - name: Concurrency tests under the thread sanitizer
+        run: |
+          python3 tests/run.py --red build-tsan/red --tests tests \
+            --filter concurrency
