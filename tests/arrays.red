@@ -54,3 +54,8 @@ print(clearMe);                      // expect: []
 print([1] == [1]);                   // expect: false
 const same = [1];
 print(same == same);                 // expect: true
+
+// equals() compares contents, where == compares identity.
+print([1, [2, 3]].equals([1, [2, 3]]));      // expect: true
+print([1, 2].equals([1, 2, 3]));             // expect: false
+print([1, 2] == [1, 2]);                     // expect: false

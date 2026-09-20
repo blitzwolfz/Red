@@ -30,7 +30,18 @@ counts[1] = "first";
 counts[1.0] = "second";
 print(counts.len(), counts[1]);      // expect: 1 second
 
-// Map keys must be simple values.
+// Enum members are allowed as keys, because each one is a single object
+// that never changes.
+enum Suit { Hearts, Spades }
+const bySuit = {};
+bySuit[Suit.Hearts] = "red";
+print(bySuit[Suit.Hearts], bySuit[Suit.Spades]);   // expect: red nil
+
+// equals() compares contents, where == compares identity.
+print({"a": [1, 2]}.equals({"a": [1, 2]}));        // expect: true
+print({"a": 1}.equals({"a": 1, "b": 2}));          // expect: false
+
+// Anything else is refused.
 const bad = {};
 bad[[1, 2]] = "x";
-// expect runtime error: Map keys must be strings, numbers, booleans or nil.
+// expect runtime error: A map key must be a string, number, boolean, nil or enum member, got array.
