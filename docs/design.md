@@ -232,6 +232,25 @@ A nested run loop, which is what `import` and callbacks such as
 that line. Without it, an error inside an imported module could jump into
 a `try` block in the importing file and leave the stacks inconsistent.
 
+Leaving a try block by jumping out of it, with `break` or `continue`,
+has to close the handler on the way. A handler left behind points at a
+frame and a stack depth that no longer exist, so a later `throw` resumes
+inside dead code. The compiler counts the try blocks open at the start of
+each loop and emits one `TRY_END` per handler opened since.
+
+## Stack limits
+
+Two separate bounds. Call depth is capped at 256 frames. That alone does
+not keep pushes inside the value stack, because one frame can hold up to
+256 locals plus the temporaries its expressions need, and 256 of those
+would run past the end.
+
+So the compiler records an upper bound on each function's stack use, and
+a call checks that bound against the room left before it pushes a frame.
+Going over reports an error that a program can catch, rather than writing
+past the end of the buffer. Whichever limit is reached first is the one
+reported.
+
 ## Modules
 
 Each file is a module with its own globals table. Built-in functions live
@@ -285,6 +304,9 @@ These are real and they are not hidden:
 - Type annotations are parsed and ignored.
 - String-heavy code is slow, because every string is interned.
 - A task that is never joined is kept alive until the program ends.
+- Each task's value stack is one megabyte, allocated up front. That is
+  the price of never moving it, because call frames and open upvalues
+  hold raw pointers into it.
 - The instruction pointer lives in the call frame rather than in a local
   variable in the dispatch loop. Caching it would be the first thing to
   try for speed.

@@ -75,6 +75,11 @@ struct ObjFunction {
   Obj obj;
   int arity;
   int upvalueCount;
+  // Upper bound on the value stack slots this function can use: its
+  // locals plus the temporaries its expressions can hold. A call checks
+  // this before pushing a frame, so a deep chain of wide frames reports
+  // an overflow instead of running off the end of the stack.
+  int slotCount;
   Chunk chunk;
   ObjString* name;
   ObjModule* module;

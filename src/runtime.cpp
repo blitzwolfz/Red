@@ -113,6 +113,7 @@ ObjFunction* Runtime::newFunction(ObjModule* module) {
   ObjFunction* fn = NEW_OBJECT(ObjFunction, Function);
   fn->arity = 0;
   fn->upvalueCount = 0;
+  fn->slotCount = 0;
   fn->name = nullptr;
   fn->module = module;
   return fn;

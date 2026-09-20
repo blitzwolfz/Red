@@ -49,6 +49,24 @@ code to rewrite in a language as small as Red.
 The compiler produces bytes. Red cannot work with bytes properly yet.
 These gaps have to close first.
 
+Speed is not one of them. That was the early assumption, and measuring it
+showed the opposite. Interning is slow for many *distinct* strings, which
+is what the `string` benchmark creates, and a win for a small vocabulary
+used over and over, which is what a compiler has. On compiler shaped work
+Red matches CPython:
+
+| Workload | Red |
+|---|--:|
+| Scan 116K characters one at a time and classify each | 10.9ms |
+| The same in CPython 3.14 | 11.5ms |
+| Accumulate 20,000 short strings a character at a time | 16ms |
+| Push 500,000 bytes into an array | 25ms |
+| 300,000 keyword lookups in a map | 28ms |
+
+Single character indexing is nearly free for the same reason: there are
+only so many distinct characters, so `source[i]` finds one already in the
+intern table instead of allocating.
+
 | Gap | Why the compiler needs it |
 |---|---|
 | Bitwise operators | Splitting a two byte operand into two bytes needs `>>` and `&`. |
@@ -56,7 +74,7 @@ These gaps have to close first.
 | A byte array type | Building `code` needs a growable array of values in 0 to 255, not a string. |
 | Binary safe file output | `write_file` writes text. Writing a compiled file needs raw bytes. |
 | A compiled file format | There is no way to save a chunk and load it back. |
-| Faster strings | Every string is interned. A compiler makes many short lived strings, and the `string` benchmark shows that cost. |
+| A way to build a byte | `chr(n)` and `code_at(i)`. Strings already carry arbitrary bytes and `write_file` is binary safe, but there is no way to turn the number 200 into a character. This is the one gap that blocks writing a compiled file at all. |
 
 ## Stages
 

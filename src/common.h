@@ -18,8 +18,13 @@ constexpr int kBytecodeVersion = 1;
 // smashing the host stack.
 constexpr int kMaxFrames = 256;
 
-// Size of one task's value stack. Each task allocates its own, so this is
-// a per-thread cost and is kept well under a typical thread stack size.
-constexpr int kMaxStack = 16384;
+// Size of one task's value stack, in slots. Each task allocates its own,
+// so this is a per-thread cost: 64K slots is one megabyte per task.
+//
+// The frame limit alone does not bound stack use, because one frame can
+// hold up to 256 locals plus its temporaries. Calls check the callee's
+// slotCount against what is left, which is what actually keeps pushes
+// inside this buffer.
+constexpr int kMaxStack = 65536;
 
 }  // namespace red

@@ -176,6 +176,17 @@ bool VM::call(ObjClosure* closure, int argCount) {
     return runtimeError("Stack overflow: call depth exceeded %d frames.",
                         kMaxFrames);
   }
+  // A frame can be far wider than the average, so depth on its own is not
+  // a safe bound. Check the room this callee can actually need.
+  if (stackTop_ + closure->function->slotCount > stack_ + kMaxStack) {
+    return runtimeError(
+        "Stack overflow: %s needs %d slots and only %ld are left.",
+        closure->function->name == nullptr
+            ? "<script>"
+            : closure->function->name->chars,
+        closure->function->slotCount,
+        (long)(stack_ + kMaxStack - stackTop_));
+  }
   CallFrame* frame = &frames_[frameCount_++];
   frame->closure = closure;
   frame->ip = closure->function->chunk.code.data();

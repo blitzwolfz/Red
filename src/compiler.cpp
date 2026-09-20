@@ -48,6 +48,9 @@ struct CompilerUpvalue {
 struct LoopState {
   int continueTarget;
   int scopeDepth;
+  // Active try blocks when the loop began. Leaving the loop from inside a
+  // try has to drop the handlers opened since.
+  int tryDepth;
   std::vector<int> breakJumps;
 };
 
@@ -75,6 +78,12 @@ struct FunctionState {
   CompilerUpvalue upvalues[kMaxUpvalues];
   int scopeDepth = 0;
   std::vector<LoopState> loops;
+  // Try blocks currently open in this function.
+  int tryDepth = 0;
+  // Worst case stack use, used to fill ObjFunction::slotCount.
+  int maxLocals = 0;
+  int maxTemps = 0;
+  int nestDepth = 0;
 };
 
 struct ClassState {
@@ -126,6 +135,11 @@ class Compiler {
   };
 
   Chunk& chunk() { return state_->function->chunk; }
+
+  // Raises the recorded worst case number of temporaries.
+  void noteTemps(int count) {
+    if (count > state_->maxTemps) state_->maxTemps = count;
+  }
 
   // ---- token plumbing ----
   void advance();
@@ -186,6 +200,7 @@ class Compiler {
   void tryStatement();
   void throwStatement();
   void popLoopLocals(int targetDepth);
+  void closeLoopHandlers();
 
   void function(FunctionKind kind, const std::string& name);
   void method();
@@ -375,6 +390,9 @@ void Compiler::addLocal(const std::string& name, bool isConst) {
     return;
   }
   state_->locals.push_back({name, -1, false, isConst});
+  if ((int)state_->locals.size() > state_->maxLocals) {
+    state_->maxLocals = (int)state_->locals.size();
+  }
 }
 
 void Compiler::declareVariable(bool isConst) {
@@ -686,6 +704,7 @@ void Compiler::function(FunctionKind kind, const std::string& name) {
   block();
 
   emitReturn();
+  state.function->slotCount = state.maxLocals + state.maxTemps + 8;
   ObjFunction* function = state.function;
   state_ = state.enclosing;
   runtime_.popRoot();
@@ -758,7 +777,7 @@ void Compiler::ifStatement() {
 
 void Compiler::whileStatement() {
   int loopStart = (int)chunk().code.size();
-  state_->loops.push_back({loopStart, state_->scopeDepth, {}});
+  state_->loops.push_back({loopStart, state_->scopeDepth, state_->tryDepth, {}});
 
   consume(TokenType::LeftParen, "Expect '(' after 'while'.");
   expression();
@@ -812,7 +831,8 @@ void Compiler::forStatement() {
     patchJump(bodyJump);
   }
 
-  state_->loops.push_back({continueTarget, state_->scopeDepth, {}});
+  state_->loops.push_back(
+      {continueTarget, state_->scopeDepth, state_->tryDepth, {}});
   statement();
   emitLoop(loopStart);
 
@@ -823,6 +843,15 @@ void Compiler::forStatement() {
   for (int jump : state_->loops.back().breakJumps) patchJump(jump);
   state_->loops.pop_back();
   endScope();
+}
+
+// Drops the try handlers opened inside the loop. Leaving a try block by
+// jumping out of it still has to close it, or the handler stays live and
+// a later throw lands in dead code.
+void Compiler::closeLoopHandlers() {
+  for (int i = state_->tryDepth; i > state_->loops.back().tryDepth; i--) {
+    emitByte(OP_TRY_END);
+  }
 }
 
 void Compiler::popLoopLocals(int targetDepth) {
@@ -838,6 +867,7 @@ void Compiler::breakStatement() {
     return;
   }
   consume(TokenType::Semicolon, "Expect ';' after 'break'.");
+  closeLoopHandlers();
   popLoopLocals(state_->loops.back().scopeDepth);
   state_->loops.back().breakJumps.push_back(emitJump(OP_JUMP));
 }
@@ -848,6 +878,7 @@ void Compiler::continueStatement() {
     return;
   }
   consume(TokenType::Semicolon, "Expect ';' after 'continue'.");
+  closeLoopHandlers();
   popLoopLocals(state_->loops.back().scopeDepth);
   emitLoop(state_->loops.back().continueTarget);
 }
@@ -870,10 +901,12 @@ void Compiler::returnStatement() {
 
 void Compiler::tryStatement() {
   int handlerJump = emitJump(OP_TRY_BEGIN);
+  state_->tryDepth++;
   beginScope();
   consume(TokenType::LeftBrace, "Expect '{' after 'try'.");
   block();
   endScope();
+  state_->tryDepth--;
   emitByte(OP_TRY_END);
   int doneJump = emitJump(OP_JUMP);
 
@@ -907,6 +940,15 @@ void Compiler::throwStatement() {
 void Compiler::expression() { parsePrecedence(Precedence::Assignment); }
 
 void Compiler::parsePrecedence(Precedence precedence) {
+  // Each level of nesting can leave a couple of values pending on the
+  // stack, so the deepest nesting bounds what an expression costs.
+  state_->nestDepth++;
+  noteTemps(state_->nestDepth * 2);
+  struct DepthGuard {
+    FunctionState* state;
+    ~DepthGuard() { state->nestDepth--; }
+  } depthGuard{state_};
+
   advance();
   ParseFn prefixRule = getRule(previous_.type)->prefix;
   if (prefixRule == nullptr) {
@@ -943,6 +985,7 @@ uint8_t Compiler::argumentList() {
     } while (match(TokenType::Comma));
   }
   consume(TokenType::RightParen, "Expect ')' after arguments.");
+  noteTemps(count + 2);
   return count;
 }
 
@@ -1091,6 +1134,7 @@ void Compiler::arrayLiteral(bool) {
     } while (match(TokenType::Comma));
   }
   consume(TokenType::RightBracket, "Expect ']' after array elements.");
+  noteTemps(count + 2);
   emitByte(OP_ARRAY);
   emitShort(count);
 }
@@ -1109,6 +1153,7 @@ void Compiler::mapLiteral(bool) {
     } while (match(TokenType::Comma));
   }
   consume(TokenType::RightBrace, "Expect '}' after map entries.");
+  noteTemps(count * 2 + 2);
   emitByte(OP_MAP);
   emitShort(count);
 }
@@ -1238,6 +1283,7 @@ ObjFunction* Compiler::compileScript() {
     declaration();
   }
   emitReturn();
+  state.function->slotCount = state.maxLocals + state.maxTemps + 8;
 
   runtime_.popRoot();
   state_ = nullptr;
