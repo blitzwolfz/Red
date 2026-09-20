@@ -83,6 +83,39 @@ let legCount = 0;
 for (let name in legs) { legCount += legs[name]; }
 print("legs in total: ${legCount}");
 
+// A pattern in the loop takes a key and a value at once.
+let described = [];
+for (let [name, count] in legs.entries()) {
+  described.push("${name} has ${count}");
+}
+print(described.sort().join("; "));
+
+// ---- enums ----------------------------------------------------------
+// An enum is a set of named constants. Members print with their name,
+// compare by identity, and can be map keys or switch cases.
+enum Size { Small, Medium, Large }
+enum Status { Ok = 200, NotFound = 404 }
+
+print("sizes: ${Size.values()}, Large is ${Size.Large.value}");
+print("404 is ${Status.from(404)}");
+
+const description = {};
+description[Size.Small] = "fits in a hand";
+description[Size.Large] = "needs both arms";
+print("Small: ${description[Size.Small]}");
+
+// ---- destructuring --------------------------------------------------
+// A pattern binds several names at once. It works on arrays, maps and
+// instances, it nests, and the last part can gather the rest.
+const [width, height] = [1920, 1080];
+print("screen ${width}x${height}");
+
+const [best, ...others] = animals.sort();
+print("best ${best}, others ${others}");
+
+const {kind: firstKind} = {"kind": "otter", "legs": 4};
+print("read a field by name: ${firstKind}");
+
 // ---- classes --------------------------------------------------------
 class Animal {
   init(kind: String) {
@@ -157,6 +190,7 @@ print("chr(82) is ${chr(82)}, 'R' is ${"R".code_at(0)}");
 print("bytes of 'Red': ${"Red".bytes()}");
 
 // ---- errors ---------------------------------------------------------
+// Errors are values. Every one carries a message, a kind and a trace.
 fun divide(a, b) {
   if (b == 0) {
     throw error("cannot divide by zero", {"numerator": a});
@@ -170,13 +204,31 @@ try {
   print("caught: ${e.message} (numerator was ${e.payload["numerator"]})");
 }
 
-// Faults raised by the runtime are caught the same way.
-try {
-  const broken = [1, 2, 3];
-  print(broken[99]);
-} catch (e) {
-  print("caught: ${e.message}");
+// A try block can have several catch clauses. A string filter selects on
+// the kind, and a class filter matches a thrown instance, including
+// subclasses. An error nothing matches carries on outwards.
+class ConfigError {
+  init(message) { this.message = message; }
 }
+
+fun load(source) {
+  try {
+    switch (source) {
+      case "missing": throw ConfigError("no such setting");
+      case "maths": return 1 / 0;
+      default: return source[99];
+    }
+  } catch (e: ConfigError) {
+    return "config problem: ${e.message}";
+  } catch (e: "zero-division") {
+    return "arithmetic problem";
+  } catch (e) {
+    return "${e.kind} problem: ${e.message}";
+  }
+}
+print(load("missing"));
+print(load("maths"));
+print(load("abc"));
 
 // ---- tasks and channels ---------------------------------------------
 fun square(n) { return n * n; }

@@ -5,7 +5,10 @@ It is the contract between the compiler and the virtual machine, and it is
 what a future self-hosted compiler would target. See
 [bootstrapping.md](bootstrapping.md).
 
-Format version: **2**. Version 2 added the duplication, bitwise,
+Format version: **3**. Version 3 added the catch filter and destructuring
+instructions. Version 2 added duplication, bitwise, iteration and default
+arguments. New opcodes are always added at the end of the list, so the
+numbering of the older ones never moves. Version 2 added the duplication, bitwise,
 iteration and default argument instructions listed below. They were added
 at the end of the opcode list, so the numbering of the originals did not
 move. The version in `src/common.h` changes whenever the
@@ -224,6 +227,25 @@ argument different from an explicit `nil`.
 
 Rest parameters need no instruction. The call gathers the extra
 arguments into an array before the frame is pushed.
+
+### Errors and patterns
+
+| Opcode | Operands | Stack effect |
+|---|---|---|
+| `CATCH_MATCHES` | | `error filter -> bool` |
+| `DESTRUCTURE_INDEX` | index | `subject -> value` |
+| `DESTRUCTURE_REST` | index | `subject -> array` |
+| `DESTRUCTURE_FIELD` | constant | `subject -> value` |
+
+`CATCH_MATCHES` consumes both operands. A `try` with several `catch`
+clauses keeps the caught error in a hidden slot and pushes a copy of it
+for each clause to test, so each test takes its copy with it.
+
+The three destructuring instructions exist rather than reusing
+`GET_INDEX` and `GET_PROPERTY` because patterns need different rules. A
+position past the end gives `nil` instead of failing, since a pattern may
+be longer than what it matches, and a field read never finds a method, so
+`let {len} = point` cannot pick one up by accident.
 
 ### Tasks and modules
 

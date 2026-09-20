@@ -22,7 +22,7 @@ interleave in the middle of a line.
 | `repr(value)` | The same, but strings keep their quotes. |
 | `num(value)` | A number, or `nil` when the whole string is not a number. |
 | `int(value)` | The number with its fractional part removed. |
-| `len(value)` | Length of a string, array or map. |
+| `len(value)` | Length of a string, array, map or enum. |
 | `chr(code)` | A one character string for a byte value from 0 to 255. |
 
 ```red
@@ -62,6 +62,7 @@ print(blob.bytes());         // [82, 101, 100]
 | `assert(condition, message)` | The same, with your own message. |
 | `error(message)` | Builds an error value, for `throw`. |
 | `error(message, payload)` | The same, carrying any value. |
+| `error(message, payload, kind)` | The same, with an explicit kind. |
 
 ## Input
 
@@ -241,3 +242,15 @@ export, and [`ffi/example_ext.c`](../ffi/example_ext.c) is a working one.
 | `set(key, value)` | Gives the map. |
 | `has(key)` `remove(key)` | |
 | `keys()` `values()` | Arrays, in no particular order. |
+| `entries()` | Each entry as a two element array, for `for (let [k, v] in m.entries())`. |
+
+## Enum methods
+
+| Method | Result |
+|---|---|
+| `values()` | Members, in declaration order. |
+| `from(value)` | The member with that value, or `nil`. |
+| `name()` | The enum's own name. |
+| `len()` | How many members. |
+
+A member has `name`, `value` and `owner`.

@@ -363,6 +363,103 @@ print(ages.get("nobody", 0));   // 0, a default for missing keys
 print(ages.keys().sort());
 ```
 
+## Enums
+
+An enum is a set of named constants.
+
+```red
+enum Colour { Red, Green, Blue }
+enum Status { Ok = 200, NotFound = 404, Teapot }
+```
+
+Values count up from zero unless a member gives one, and counting carries
+on from the last value given, so `Teapot` above is 405. Negative values
+are allowed.
+
+Each member is a single object, built once when the enum is declared. So
+members compare by identity, which is cheap, and they can be map keys.
+They print with their enum name, which is the point: a bare number tells
+a reader nothing when something goes wrong.
+
+```red
+print(Colour.Red);            // Colour.Red
+print(Colour.Red.name);       // Red
+print(Colour.Green.value);    // 1
+print(Colour.Red.owner);      // <enum Colour>
+```
+
+The property is called `owner` rather than `enum`, because `enum` is a
+keyword and could never be written after a dot.
+
+The enum itself answers questions about its members:
+
+| Call | Result |
+|---|---|
+| `Colour.values()` | Members, in declaration order. |
+| `Colour.from(value)` | The member with that value, or `nil`. |
+| `Colour.name()` | The enum's own name. |
+| `Colour.len()`, `len(Colour)` | How many members. |
+
+Members work in `switch`, as map keys, and their `value` indexes an
+array:
+
+```red
+switch (colour) {
+  case Colour.Red, Colour.Green: return "warm-ish";
+  case Colour.Blue: return "cool";
+}
+const labels = ["red", "green", "blue"];
+print(labels[Colour.Green.value]);
+```
+
+An enum binding is always `const`. Asking for a member that does not
+exist is an error rather than `nil`, because it is almost always a typo.
+
+A member whose name clashes with one of the calls above wins, so an enum
+with a member called `values` hides `values()`.
+
+Enums do not carry data. A variant with fields is a class with a `kind`
+field.
+
+## Destructuring
+
+A pattern binds several names at once.
+
+```red
+let [a, b] = [1, 2];
+let [head, ...tail] = items;
+let {name, age} = person;
+let {name: who} = person;
+```
+
+Array patterns read by position. A pattern may be longer than what it
+matches, and the extra names are `nil`, the same way a missing map key
+is. A `...` binding takes whatever is left, always as an array, and must
+come last.
+
+Map patterns read by name. They work on maps, on class instances, on
+modules and on enums. On an instance they read fields only, so a pattern
+can never pick up a method by accident.
+
+Patterns nest, in both directions:
+
+```red
+let [[x, y], {z}] = [[1, 2], {"z": 3}];
+let {corner: [left, top]} = box;
+```
+
+`const` patterns bind constants. A `for ... in` loop takes a pattern too,
+which is what makes walking a map's entries read well:
+
+```red
+for (let [key, value] in ages.entries()) {
+  print(key, value);
+}
+```
+
+Destructuring something that has no elements or no fields is an error
+naming the type, rather than a confusing failure further on.
+
 ## Classes
 
 ```red
@@ -425,11 +522,12 @@ throw "something broke";
 throw error("bad input", {"field": "age"});
 ```
 
-A caught error has three properties:
+A caught error has four properties:
 
 | Property | Meaning |
 |---|---|
 | `message` | The text. |
+| `kind` | What sort of failure it is. See below. |
 | `trace` | The call stack where it was raised. |
 | `payload` | The value that was thrown, or the second argument to `error()`. |
 
@@ -442,6 +540,64 @@ try {
   print(e.message);       // Division by zero.
 }
 ```
+
+### Kinds
+
+Every error carries a kind, so a program can tell one failure from
+another without reading the message. The runtime uses this fixed set:
+
+| Kind | Raised by |
+|---|---|
+| `type` | An operation applied to the wrong type. |
+| `name` | An undefined variable, property, method or member. |
+| `index` | An array or string index out of range. |
+| `key` | A value that cannot be a map key. |
+| `arity` | The wrong number of arguments. |
+| `zero-division` | Dividing or taking a remainder by zero. |
+| `overflow` | Running out of call frames or stack. |
+| `import` | A module that cannot be found or compiled. |
+| `assert` | A failed `assert`. |
+| `io` | File operations. |
+| `net` | Sockets. |
+| `task` | Channels and tasks. |
+| `ffi` | Loading or calling an extension. |
+| `legacy` | Running a v1 script. |
+| `user` | `throw` of anything that is not a class instance. |
+| `runtime` | Anything else. |
+
+A thrown class instance takes that class's name as its kind, and its
+`message` field as the message if it has one. `error(message, payload,
+kind)` sets a kind explicitly.
+
+### Several catch clauses
+
+A `try` can have more than one `catch`. Each may carry a filter after a
+colon, and the first clause that matches runs.
+
+```red
+try {
+  loadConfig(path);
+} catch (e: ConfigError) {
+  report(e.message);
+} catch (e: "io") {
+  report("could not read ${path}");
+} catch (e) {
+  report("unexpected: ${e.kind}");
+}
+```
+
+A filter is an ordinary expression:
+
+- a **string** matches the error's `kind`
+- a **class** matches when the thrown value was an instance of it, or of
+  a subclass
+
+Clauses are tried in order, so put the specific ones first. A clause with
+no filter catches everything and must come last.
+
+An error that no clause matches carries on outwards unchanged, with its
+message, kind and original trace. That is what lets a function handle the
+cases it knows about and leave the rest alone.
 
 An error with no handler stops the program, prints the message and the
 call stack, and exits with code 70.
@@ -526,11 +682,21 @@ red legacy old_script.red
 ```
 program        -> declaration* EOF
 
-declaration    -> classDecl | funDecl | varDecl | importDecl | statement
+declaration    -> classDecl | enumDecl | funDecl | varDecl | importDecl
+                | statement
 classDecl      -> "class" IDENT ( "<" IDENT )? "{" method* "}"
+enumDecl       -> "enum" IDENT "{" enumMember ( "," enumMember )* ","? "}"
+enumMember     -> IDENT ( "=" "-"? NUMBER )?
 method         -> IDENT "(" parameters? ")" returnType? block
 funDecl        -> "fun" IDENT "(" parameters? ")" returnType? block
-varDecl        -> ( "let" | "const" ) IDENT annotation? ( "=" expression )? ";"
+varDecl        -> ( "let" | "const" )
+                  ( IDENT annotation? ( "=" expression )?
+                  | pattern "=" expression ) ";"
+pattern        -> "[" ( patternItem ( "," patternItem )* )? ","?
+                      ( "..." IDENT )? "]"
+                | "{" patternField ( "," patternField )* ","? "}"
+patternItem    -> IDENT | pattern
+patternField   -> IDENT ( ":" ( IDENT | pattern ) )?
 importDecl     -> "import" STRING ( "as" IDENT )? ";"
 
 parameters     -> parameter ( "," parameter )* ( "," restParam )?
@@ -548,14 +714,16 @@ ifStmt         -> "if" "(" expression ")" statement ( "else" statement )?
 whileStmt      -> "while" "(" expression ")" statement
 forStmt        -> "for" "(" ( varDecl | exprStmt | ";" )
                         expression? ";" expression? ")" statement
-forInStmt      -> "for" "(" "let" IDENT "in" expression ")" statement
+forInStmt      -> "for" "(" "let" ( IDENT | pattern ) "in" expression ")"
+                  statement
 switchStmt     -> "switch" "(" expression ")" "{" switchCase* "}"
 switchCase     -> "case" expression ( "," expression )* ":" declaration*
                 | "default" ":" declaration*
 returnStmt     -> "return" expression? ";"
 breakStmt      -> "break" ";"
 continueStmt   -> "continue" ";"
-tryStmt        -> "try" block "catch" "(" IDENT ")" block
+tryStmt        -> "try" block catchClause+
+catchClause    -> "catch" "(" IDENT ( ":" expression )? ")" block
 throwStmt      -> "throw" expression ";"
 block          -> "{" declaration* "}"
 
@@ -594,7 +762,7 @@ arguments      -> expression ( "," expression )*
 
 ```
 and    as     break  case   catch  class  const  continue
-default else  false  for    fun    if     import in
-let    nil    or     return spawn  super  this   throw
-true   try    switch while
+default else  enum   false  for    fun    if     import
+in     let    nil    or     return spawn  super  this
+throw  true   try    switch while
 ```

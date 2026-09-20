@@ -42,8 +42,8 @@ fun countSlice(lines, start, end, out) {
 }
 
 fun merge(into, partial) {
-  for (let key in partial) {
-    into[key] = into.get(key, 0) + partial[key];
+  for (let [word, count] in partial.entries()) {
+    into[word] = into.get(word, 0) + count;
   }
   return into;
 }
@@ -104,8 +104,8 @@ const check = chan(1);
 countSlice(lines, 0, lines.len(), check);
 const serial = check.recv();
 let matches = true;
-for (let key in serial) {
-  if (totals.get(key, 0) != serial[key]) { matches = false; }
+for (let [word, count] in serial.entries()) {
+  if (totals.get(word, 0) != count) { matches = false; }
 }
 print("matches a serial count: ${matches}");
 

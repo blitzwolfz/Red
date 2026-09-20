@@ -46,31 +46,53 @@ code to rewrite in a language as small as Red.
 
 ## What Red is missing
 
-Most of this list has now closed. What is left is one thing.
+One thing.
 
 | Gap | State |
 |---|---|
-| Bitwise operators | **Done.** `&` `\|` `^` `~` `<<` `>>` on 32 bit integers, with a defined shift count and defined wrapping. |
-| Turning a number into a byte | **Done.** `chr(n)` and `text.code_at(i)`, plus `text.bytes()`. |
-| Binary safe file output | **Done.** Strings hold arbitrary bytes including zero, and `write_file` writes them unchanged. A round trip of all 256 byte values is covered by `tests/bytes.red`. |
-| Enough call depth | **Done.** The frame limit is 1024, and a call checks the stack room a function can need before it pushes a frame. |
-| A compiled file format | **Still missing.** This is stage 1 below, and it is now the only thing in the way. |
+| Bitwise operators | **Done.** `&` `\|` `^` `~` `<<` `>>` on 32 bit integers. |
+| Turning a number into a byte | **Done.** `chr(n)`, `text.code_at(i)`, `text.bytes()`. |
+| Binary safe file output | **Done.** All 256 byte values round trip through a file. |
+| Named constants | **Done.** `enum`, with members that index arrays, key maps and print by name. |
+| Selective error handling | **Done.** Errors carry a kind, and a `try` can have several filtered `catch` clauses. |
+| Binding several names at once | **Done.** Array, map and instance patterns, nested, with rest. |
+| Enough call depth | **Done.** 1024 frames, with a stack check before each call. |
+| A compiled file format | **Still missing.** Stage 1 below, and now the only thing in the way. |
 
-Splitting a two byte operand, which is the operation the whole emitter is
-built on, now reads the same in Red as it does in the C++:
+### The rehearsal
 
-```red
-fun emitShort(code, value) {
-  code.push(value >> 8 & 255);
-  code.push(value & 255);
-}
-```
+[`examples/mini_compiler.red`](../examples/mini_compiler.red) is a
+working compiler and virtual machine for arithmetic, written in Red. It
+is small on purpose, but it is built the same way the real one will be,
+and it uses every part of the language the port depends on:
 
-Speed is not a gap either. That was the early assumption, and measuring
-it showed the opposite. Interning is slow for many *distinct* strings,
-which is what the `string` benchmark creates, and a win for a small
-vocabulary used over and over, which is what a compiler has. On compiler
-shaped work Red matches CPython:
+- an `enum` for token kinds and another for opcodes, used as array
+  indexes and as `switch` cases
+- a Pratt rule table: an array indexed by a token kind's value, holding
+  bound methods as values
+- `value >> 8 & 255` and `value & 255` to pack a two byte operand
+- `chr()` to turn the finished code into bytes, then `write_file` and
+  `bytes()` to read it back unchanged
+- destructuring to unpack a rule and a compiler's result
+- error kinds to tell a bad input program from a bug in the compiler
+
+It runs. So the language is not what is in the way.
+
+### Not blocking, but worth having first
+
+- `finally`, for cleanup that has to happen on both paths.
+- String padding, so a disassembler can line its columns up without
+  building spaces by hand.
+- A set type. A map with ignored values works, and that is what the C++
+  compiler's own `constGlobals_` amounts to.
+
+### Speed is not a gap
+
+That was the early assumption, and measuring it showed the opposite.
+Interning is slow for many *distinct* strings, which is what the `string`
+benchmark creates, and a win for a small vocabulary used over and over,
+which is what a compiler has. On compiler shaped work Red matches
+CPython:
 
 | Workload | Red |
 |---|--:|
@@ -105,15 +127,25 @@ gives the same output as the source did.
 
 ### Stage 2: the missing language pieces
 
-**Finished.** Bitwise operators, `chr`, `code_at` and `bytes` are in, and
-binary file input and output round trips every byte value. `for ... in`,
-`switch`, compound assignment and default and rest parameters went in at
-the same time, because the port in stage 3 is several thousand lines of
-Red and those decide whether it is bearable to write.
+**Finished.** Two rounds of it.
+
+The first round added the tools: bitwise operators, `chr`, `code_at` and
+`bytes`, and binary file input and output. Alongside them went `for ...
+in`, `switch`, compound assignment and default and rest parameters,
+because the port in stage 3 is several thousand lines of Red and those
+decide whether it is bearable to write.
+
+The second round added the three that shape how the port is organised:
+`enum`, so a token kind prints as `TokenType.Fun` rather than `38`;
+filtered `catch` clauses, so the compiler can separate a bad input
+program from a bug in itself; and destructuring, so a rule table entry
+or a multi-part result unpacks in one line.
 
 What is left of this stage is the acceptance test itself: a Red program
 that builds a `.redc` file byte by byte and has the virtual machine run
 it. That needs stage 1 first.
+[`examples/mini_compiler.red`](../examples/mini_compiler.red) is the
+rehearsal for it.
 
 ### Stage 3: the self-hosted compiler
 
@@ -168,7 +200,11 @@ stable.
 
 Stage 1 was deliberately left until after the language changes. Writing
 the serialiser first would have frozen the opcode list exactly when it
-was about to gain eleven instructions.
+was about to gain fifteen instructions across two rounds.
+
+That is also the thing to watch from here. The format is at version 3,
+having moved three times while the language was being filled in. Once the
+port starts, it should stop moving.
 
 The thing to protect along the way is the bytecode format. Every change to
 it makes the self-hosted compiler and the C++ compiler drift apart. Once

@@ -134,11 +134,28 @@ const ages = {"ann": 31, "bob": 25};
 for (let name in names) { print(name, ages[name]); }
 print(names.map(fun (n) { return ages[n]; }));
 
+// enums, with names that survive into error messages
+enum Status { Ok = 200, NotFound = 404 }
+print(Status.from(404));          // Status.NotFound
+
+// destructuring, including in a loop
+const [first, ...others] = names;
+for (let [who, years] in ages.entries()) { print(who, years); }
+
 // switch, with no fall through
 switch (count) {
   case 1, 2: print("few");
   case 3: print("three");
   default: print("many");
+}
+
+// errors carry a kind, and catch clauses can select on it
+try {
+  loadConfig();
+} catch (e: ConfigError) {
+  report(e.message);
+} catch (e: "io") {
+  report("could not read the file");
 }
 
 // default and rest parameters
@@ -234,6 +251,7 @@ print(output.split("\n").len());
 | [`examples/echo_server.red`](examples/echo_server.red) | A concurrent TCP echo server, with clients. |
 | [`examples/word_count.red`](examples/word_count.red) | Parallel word count over a file. |
 | [`examples/legacy_bridge.red`](examples/legacy_bridge.red) | Calling v1 from v2. |
+| [`examples/mini_compiler.red`](examples/mini_compiler.red) | A compiler and virtual machine for arithmetic, written in Red. |
 
 ## Documentation
 

@@ -229,7 +229,18 @@ carries a message and the call stack from where it was raised.
 
 Anything can be thrown. A value that is not already an error is wrapped in
 one, so a `catch` block always receives something with `.message`,
-`.trace` and `.payload`.
+`.kind`, `.trace` and `.payload`.
+
+Every error carries a kind, and a `try` can have several `catch` clauses
+with filters. A filter is either a string, matched against the kind, or a
+class, matched against the thrown instance and its superclasses. Matching
+on classes is why `ObjClass` keeps a superclass pointer even though
+method lookup does not need one: methods are copied down at the point of
+inheritance, so the link exists only to answer this question.
+
+An error that no clause matches carries on outwards unchanged. Without
+that, a `try` that named a few kinds would quietly swallow everything
+else, which is the failure mode that makes exception handling untrusted.
 
 A nested run loop, which is what `import` and callbacks such as
 `array.map` use, records the frame it started at. Unwinding never crosses
@@ -254,6 +265,26 @@ a call checks that bound against the room left before it pushes a frame.
 Going over reports an error that a program can catch, rather than writing
 past the end of the buffer. Whichever limit is reached first is the one
 reported.
+
+## Enums
+
+An enum is built while compiling, not at run time. Every member is
+created once and the whole enum is stored as a single constant, so
+declaring one costs nothing when the program runs and mentioning a member
+is a constant load.
+
+Members are unique objects, so comparing them is a pointer compare and
+they can be map keys. That is why the rule for map keys is written as one
+function, `isHashableKey`, rather than repeated at each site: a key must
+either compare by value or be an object that never changes.
+
+Members print as `Colour.Red` rather than as a number. A compiler written
+in Red will have a token kind and an opcode for every instruction, and
+reading `38` in a trace instead of `TokenType.Fun` is the difference
+between a debuggable program and a frustrating one.
+
+Enums do not carry data. A tagged union would be a bigger feature, and it
+would overlap with classes, which already hold fields.
 
 ## Modules
 
