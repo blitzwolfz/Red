@@ -1,0 +1,166 @@
+#include "debug.h"
+
+#include <cstdio>
+
+#include "object.h"
+
+namespace red {
+
+namespace {
+
+size_t simpleInstruction(const char* name, size_t offset) {
+  std::printf("%s\n", name);
+  return offset + 1;
+}
+
+size_t byteInstruction(const char* name, const Chunk& chunk, size_t offset) {
+  uint8_t slot = chunk.code[offset + 1];
+  std::printf("%-18s %4d\n", name, slot);
+  return offset + 2;
+}
+
+uint16_t readShort(const Chunk& chunk, size_t offset) {
+  return (uint16_t)((chunk.code[offset] << 8) | chunk.code[offset + 1]);
+}
+
+size_t shortInstruction(const char* name, const Chunk& chunk, size_t offset) {
+  std::printf("%-18s %4d\n", name, readShort(chunk, offset + 1));
+  return offset + 3;
+}
+
+size_t constantInstruction(const char* name, const Chunk& chunk,
+                           size_t offset) {
+  uint16_t constant = readShort(chunk, offset + 1);
+  std::printf("%-18s %4d '%s'\n", name, constant,
+              valueToDisplay(chunk.constants[constant]).c_str());
+  return offset + 3;
+}
+
+size_t invokeInstruction(const char* name, const Chunk& chunk, size_t offset) {
+  uint16_t constant = readShort(chunk, offset + 1);
+  uint8_t argCount = chunk.code[offset + 3];
+  std::printf("%-18s %4d '%s' (%d args)\n", name, constant,
+              valueToDisplay(chunk.constants[constant]).c_str(), argCount);
+  return offset + 4;
+}
+
+size_t jumpInstruction(const char* name, int sign, const Chunk& chunk,
+                       size_t offset) {
+  uint16_t jump = readShort(chunk, offset + 1);
+  std::printf("%-18s %4zu -> %zu\n", name, offset,
+              offset + 3 + (size_t)(sign * (int)jump));
+  return offset + 3;
+}
+
+}  // namespace
+
+size_t disassembleInstruction(const Chunk& chunk, size_t offset) {
+  std::printf("%04zu ", offset);
+  // Repeated line numbers print as a bar so that the eye can find the
+  // boundary between statements quickly.
+  if (offset > 0 && chunk.lineAt(offset) == chunk.lineAt(offset - 1)) {
+    std::printf("   | ");
+  } else {
+    std::printf("%4d ", chunk.lineAt(offset));
+  }
+
+  uint8_t instruction = chunk.code[offset];
+  switch (instruction) {
+    case OP_CONSTANT: return constantInstruction("CONSTANT", chunk, offset);
+    case OP_NIL: return simpleInstruction("NIL", offset);
+    case OP_TRUE: return simpleInstruction("TRUE", offset);
+    case OP_FALSE: return simpleInstruction("FALSE", offset);
+    case OP_POP: return simpleInstruction("POP", offset);
+    case OP_GET_LOCAL: return byteInstruction("GET_LOCAL", chunk, offset);
+    case OP_SET_LOCAL: return byteInstruction("SET_LOCAL", chunk, offset);
+    case OP_GET_GLOBAL: return constantInstruction("GET_GLOBAL", chunk, offset);
+    case OP_SET_GLOBAL: return constantInstruction("SET_GLOBAL", chunk, offset);
+    case OP_DEFINE_GLOBAL:
+      return constantInstruction("DEFINE_GLOBAL", chunk, offset);
+    case OP_GET_UPVALUE: return byteInstruction("GET_UPVALUE", chunk, offset);
+    case OP_SET_UPVALUE: return byteInstruction("SET_UPVALUE", chunk, offset);
+    case OP_GET_PROPERTY:
+      return constantInstruction("GET_PROPERTY", chunk, offset);
+    case OP_SET_PROPERTY:
+      return constantInstruction("SET_PROPERTY", chunk, offset);
+    case OP_GET_SUPER: return constantInstruction("GET_SUPER", chunk, offset);
+    case OP_EQUAL: return simpleInstruction("EQUAL", offset);
+    case OP_NOT_EQUAL: return simpleInstruction("NOT_EQUAL", offset);
+    case OP_GREATER: return simpleInstruction("GREATER", offset);
+    case OP_GREATER_EQUAL: return simpleInstruction("GREATER_EQUAL", offset);
+    case OP_LESS: return simpleInstruction("LESS", offset);
+    case OP_LESS_EQUAL: return simpleInstruction("LESS_EQUAL", offset);
+    case OP_ADD: return simpleInstruction("ADD", offset);
+    case OP_SUBTRACT: return simpleInstruction("SUBTRACT", offset);
+    case OP_MULTIPLY: return simpleInstruction("MULTIPLY", offset);
+    case OP_DIVIDE: return simpleInstruction("DIVIDE", offset);
+    case OP_MODULO: return simpleInstruction("MODULO", offset);
+    case OP_NEGATE: return simpleInstruction("NEGATE", offset);
+    case OP_NOT: return simpleInstruction("NOT", offset);
+    case OP_JUMP: return jumpInstruction("JUMP", 1, chunk, offset);
+    case OP_JUMP_IF_FALSE:
+      return jumpInstruction("JUMP_IF_FALSE", 1, chunk, offset);
+    case OP_JUMP_IF_TRUE:
+      return jumpInstruction("JUMP_IF_TRUE", 1, chunk, offset);
+    case OP_LOOP: return jumpInstruction("LOOP", -1, chunk, offset);
+    case OP_CALL: return byteInstruction("CALL", chunk, offset);
+    case OP_INVOKE: return invokeInstruction("INVOKE", chunk, offset);
+    case OP_SUPER_INVOKE: return invokeInstruction("SUPER_INVOKE", chunk, offset);
+    case OP_CLOSURE: {
+      size_t next = offset + 1;
+      uint16_t constant = readShort(chunk, next);
+      next += 2;
+      std::printf("%-18s %4d '%s'\n", "CLOSURE", constant,
+                  valueToDisplay(chunk.constants[constant]).c_str());
+      ObjFunction* function = asFunction(chunk.constants[constant]);
+      for (int i = 0; i < function->upvalueCount; i++) {
+        int isLocal = chunk.code[next++];
+        int index = chunk.code[next++];
+        std::printf("%04zu      |                     %s %d\n", next - 2,
+                    isLocal ? "local" : "upvalue", index);
+      }
+      return next;
+    }
+    case OP_CLOSE_UPVALUE: return simpleInstruction("CLOSE_UPVALUE", offset);
+    case OP_RETURN: return simpleInstruction("RETURN", offset);
+    case OP_CLASS: return constantInstruction("CLASS", chunk, offset);
+    case OP_INHERIT: return simpleInstruction("INHERIT", offset);
+    case OP_METHOD: return constantInstruction("METHOD", chunk, offset);
+    case OP_ARRAY: return shortInstruction("ARRAY", chunk, offset);
+    case OP_MAP: return shortInstruction("MAP", chunk, offset);
+    case OP_GET_INDEX: return simpleInstruction("GET_INDEX", offset);
+    case OP_SET_INDEX: return simpleInstruction("SET_INDEX", offset);
+    case OP_TO_STRING: return simpleInstruction("TO_STRING", offset);
+    case OP_TRY_BEGIN: return jumpInstruction("TRY_BEGIN", 1, chunk, offset);
+    case OP_TRY_END: return simpleInstruction("TRY_END", offset);
+    case OP_THROW: return simpleInstruction("THROW", offset);
+    case OP_SPAWN: return byteInstruction("SPAWN", chunk, offset);
+    case OP_IMPORT: return constantInstruction("IMPORT", chunk, offset);
+    default:
+      std::printf("Unknown opcode %d\n", instruction);
+      return offset + 1;
+  }
+}
+
+void disassembleChunk(const Chunk& chunk, const std::string& name) {
+  std::printf("== %s ==\n", name.c_str());
+  for (size_t offset = 0; offset < chunk.code.size();) {
+    offset = disassembleInstruction(chunk, offset);
+  }
+
+  // Nested functions live in the constant pool. Printing them after the
+  // parent keeps the output in a readable order.
+  for (Value constant : chunk.constants) {
+    if (isObj(constant) && asObj(constant)->type == ObjType::Function) {
+      ObjFunction* function = asFunction(constant);
+      std::printf("\n");
+      disassembleChunk(function->chunk,
+                       function->name == nullptr
+                           ? "<script>"
+                           : std::string(function->name->chars,
+                                         function->name->length));
+    }
+  }
+}
+
+}  // namespace red
