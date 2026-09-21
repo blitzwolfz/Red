@@ -22,7 +22,7 @@
 
 // Version of the compiled file format. Must match kBytecodeVersion in
 // src/common.h.
-const BYTECODE_VERSION = 4;
+const BYTECODE_VERSION = 5;
 
 // Instructions, in the order src/chunk.h declares them. The numbering is
 // the format, so members are never reordered, only appended.
@@ -43,7 +43,10 @@ enum Op {
   BitAnd, BitOr, BitXor, BitNot, ShiftLeft, ShiftRight,
   IterPrep, IterNext, JumpIfArg, CatchMatches,
   DestructureIndex, DestructureRest, DestructureField,
-  CheckType, CheckLocal, Is
+  CheckType, CheckLocal, Is,
+  // Waits for the value on top of the stack and replaces it with the
+  // result. See OP_AWAIT in src/chunk.h.
+  Await
 }
 
 // ---------------------------------------------------------------------
@@ -69,11 +72,12 @@ enum Tok {
   PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual,
   In, Switch, Case, Default, Ellipsis, Enum, Finally,
   Question, Is,
+  Async, Await,
 
   Error, Eof
 }
 
-const TOKEN_KINDS = 74;
+const TOKEN_KINDS = 76;
 
 // Binding power, weakest first. These are plain numbers rather than enum
 // members because binary() needs `precedence + 1`.
@@ -137,6 +141,7 @@ fun keywordTable() {
     "for": Tok.For, "fun": Tok.Fun, "if": Tok.If, "import": Tok.Import,
     "in": Tok.In, "is": Tok.Is, "let": Tok.Let, "nil": Tok.Nil,
     "or": Tok.Or,
+    "async": Tok.Async, "await": Tok.Await,
     "return": Tok.Return, "spawn": Tok.Spawn, "super": Tok.Super,
     "switch": Tok.Switch, "this": Tok.This, "throw": Tok.Throw,
     "true": Tok.True, "try": Tok.Try, "while": Tok.While,
@@ -1095,6 +1100,8 @@ class Compiler {
     rules[Tok.LessLess.value] = [nil, this.binary, P_SHIFT];
     rules[Tok.GreaterGreater.value] = [nil, this.binary, P_SHIFT];
     rules[Tok.Is.value] = [nil, this.isExpr, P_COMPARISON];
+    rules[Tok.Async.value] = [this.asyncExpr, nil, P_NONE];
+    rules[Tok.Await.value] = [this.awaitExpr, nil, P_NONE];
     return rules;
   }
 
@@ -1943,6 +1950,33 @@ class Compiler {
     this.function(kind, name);
     this.emitOp(Op.Method);
     this.emitShort(constant);
+  }
+
+  // A function of no parameters whose body is the block at the cursor.
+  // `async { ... }` needs one, and needs it to be a real closure so that
+  // the block sees the surrounding variables.
+  functionFromBlock(name) {
+    const savedCalls = this.allowCalls();
+    const state = FunctionState(this.state, K_FUNCTION, Proto());
+    state.proto.name = name;
+    state.locals.push(Local("", 0, false, true));
+    this.state = state;
+    this.beginScope();
+
+    this.consume(Tok.LeftBrace, "Expect '{' after 'async'.");
+    this.block();
+
+    this.emitReturn(false);
+    state.proto.slotCount = state.maxLocals + state.maxTemps + 8;
+    this.state = state.enclosing;
+
+    this.emitOp(Op.Closure);
+    this.emitShort(this.makeConstant(Constant(C_FUNCTION, state.proto)));
+    for (let i in range(0, state.proto.upvalueCount)) {
+      if (state.upvalues[i].isLocal) { this.emitByte(1); } else { this.emitByte(0); }
+      this.emitByte(state.upvalues[i].index);
+    }
+    this.restoreCalls(savedCalls);
   }
 
   function(kind, name) {
@@ -2993,6 +3027,24 @@ class Compiler {
     const argCount = this.argumentList();
     this.emitOp(Op.Spawn);
     this.emitByte(argCount);
+  }
+
+  // `async { ... }` is a block that runs as a task. `async f(x)` means
+  // what `spawn f(x)` means.
+  asyncExpr(canAssign) {
+    if (!this.check(Tok.LeftBrace)) {
+      this.spawnExpr(canAssign);
+      return;
+    }
+    this.functionFromBlock("async");
+    this.emitOp(Op.Spawn);
+    this.emitByte(0);
+  }
+
+  // `await e`. Binds like the other prefix operators.
+  awaitExpr(canAssign) {
+    this.parsePrecedence(P_UNARY);
+    this.emitOp(Op.Await);
   }
 
   // ---- entry point ----

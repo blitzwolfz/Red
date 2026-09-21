@@ -28,6 +28,7 @@ int hexValue(char c) {
 const std::unordered_map<std::string, TokenType>& keywords() {
   static const std::unordered_map<std::string, TokenType> table = {
       {"and", TokenType::And},       {"as", TokenType::As},
+      {"async", TokenType::Async},   {"await", TokenType::Await},
       {"case", TokenType::Case},     {"default", TokenType::Default},
       {"enum", TokenType::Enum},     {"finally", TokenType::Finally},
       {"in", TokenType::In},         {"is", TokenType::Is},

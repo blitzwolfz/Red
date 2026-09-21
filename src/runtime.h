@@ -224,6 +224,9 @@ class Runtime {
   // Interned names the VM needs on hot paths.
   ObjString* initString = nullptr;
   ObjString* messageString = nullptr;
+  // `await` joins through the same method a program would call, so that
+  // one of them cannot come to mean something the other does not.
+  ObjString* joinString = nullptr;
   // The two methods a class may define to say how its instances print
   // and compare. Interned once so that looking for them costs a pointer
   // comparison rather than a hash of the name.

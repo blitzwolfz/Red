@@ -292,31 +292,41 @@ print("kept ${gc_info()["bytes"] - before} bytes");
 
 ## Tasks and channels
 
+A task is a green thread. [docs/concurrency.md](concurrency.md) covers
+the scheduler; this is the list of what a program calls.
+
 | Function | Result |
 |---|---|
-| `chan()` | An unbuffered channel. A send waits for a receive. |
-| `chan(capacity)` | A channel that can hold `capacity` values. |
-| `sleep(seconds)` | Pauses this task. Other tasks keep running. |
+| `chan()` | An unbuffered channel: a send waits for a receive. |
+| `chan(capacity)` | A channel that holds that many values before a send waits. |
+| `select(channels)` | Takes from whichever channel has something. Gives `[channel, value]`, or `nil` when every channel is closed. |
+| `select(channels, seconds)` | The same, giving `nil` after a timeout. |
+| `sleep(seconds)` | Waits. A timer and a context switch, not a sleeping thread. |
+| `yield()` | Gives up the rest of this task's turn. |
+| `sched_info()` | A map of what the scheduler is doing: `workers`, `alive`, `runnable`, `spawned`, `finished`, `switches`, `steals`, `parks`, `waiting_io`, `timers`. |
 
-`spawn call(...)` starts a task. It is a keyword, not a function.
+`spawn f(x)` and `async f(x)` start a task and give back a handle to it.
+`async { ... }` runs a block as a task. `await t` waits for one, or for
+an array of them.
 
-Channel methods:
-
-| Method | Result |
-|---|---|
-| `send(value)` | Waits for room, then queues the value. |
-| `recv()` | Waits for a value. `nil` when the channel is closed and empty. |
-| `try_recv()` | A value if one is waiting, `nil` if not. Never waits. |
-| `close()` | No more sends. Waiting receivers wake up. |
-| `len()` | How many values are queued. |
-| `is_closed()` | Has it been closed? |
-
-Task methods:
+### Channel methods
 
 | Method | Result |
 |---|---|
-| `join()` | Waits, then gives the result. Raises what the task raised if it failed. |
-| `is_done()` | Has it finished? Does not wait. |
+| `send(value)` | Waits until there is room. Fails on a closed channel. |
+| `try_send(value)` | `true` when it went in, `false` when it would have waited. |
+| `recv()` | Waits for a value. `nil` once closed and drained. |
+| `try_recv()` | A value, or `nil` when none is waiting. |
+| `close()` | No more sends. |
+| `len()` | How many values are buffered. |
+| `is_closed()` | |
+
+### Task methods
+
+| Method | Result |
+|---|---|
+| `join()` | Waits, then gives the result. Raises what the task raised. |
+| `is_done()` | Has it finished? |
 
 ## Regular expressions
 
@@ -413,26 +423,40 @@ number, the way a shell does.
 
 ## Network
 
+Every socket is non-blocking underneath. A call that would wait parks its
+task instead, so a server holding many connections open costs a stack
+each rather than a thread each.
+
 | Function | Result |
 |---|---|
-| `tcp_listen(port)` | A listening socket. Port 0 asks the system to choose. |
-| `tcp_listen(port, backlog)` | The same, with a queue length. |
+| `tcp_listen(port)` | A listening socket. Port 0 asks the system for a free one. |
+| `tcp_listen(port, backlog)` | The same, with the queue length. Defaults to 128. |
+| `tcp_listen(port, backlog, host)` | Bound to one address, for a server that should not be reachable from elsewhere. |
 | `tcp_connect(host, port)` | A connected socket. |
+| `tcp_connect(host, port, seconds)` | The same, giving up after a timeout. |
 
-Socket methods:
+### Socket methods
 
 | Method | Result |
 |---|---|
-| `accept()` | Waits for a connection and gives a new socket. |
-| `read()` | Up to 4096 bytes as a string. `nil` when the peer closed. |
-| `read(count)` | Up to `count` bytes. |
-| `write(...)` | Sends everything. Gives the number of bytes sent. |
-| `close()` | Closes it. |
+| `accept()` | Waits for a connection and gives a socket for it. |
+| `read()` `read(limit)` | Up to `limit` bytes, 4096 by default. `nil` when the peer has closed its side. |
+| `write(...)` | Writes every argument, as text. Gives the byte count. |
+| `close()` | |
 | `port()` | The port this socket is bound to. |
-| `fd()` | The underlying file descriptor. |
+| `peer()` | The address at the other end, as `"1.2.3.4:5678"`. |
+| `set_timeout(seconds)` | How long a call may wait. Zero, the default, means as long as it takes. |
+| `timeout()` `is_closed()` `fd()` | |
 
-Every call that can wait parks the calling task first, so collection and
-other tasks keep running.
+A call that runs out of time raises an error of kind `"timeout"`.
+
+```red
+const server = tcp_listen(8080);
+for (;;) {
+  const client = server.accept();
+  spawn handle(client);
+}
+```
 
 ## Extensions
 

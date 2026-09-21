@@ -239,7 +239,8 @@ fun builtinHelp() {
 const KEYWORDS = [
   "and", "as", "break", "case", "catch", "class", "const", "continue",
   "default", "else", "enum", "false", "finally", "for", "fun", "if",
-  "import", "in", "is", "let", "nil", "or", "return", "spawn", "super",
+  "import", "in", "is", "let", "nil", "or", "return", "spawn", "async",
+  "await", "super",
   "switch", "this", "throw", "true", "try", "while",
 ];
 

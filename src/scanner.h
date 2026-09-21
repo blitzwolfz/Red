@@ -34,6 +34,7 @@ enum class TokenType {
   PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual,
   In, Switch, Case, Default, Ellipsis, Enum, Finally,
   Question, Is,
+  Async, Await,
 
   Error, Eof,
 };

@@ -135,6 +135,7 @@ size_t disassembleInstruction(const Chunk& chunk, size_t offset) {
     case OP_TRY_END: return simpleInstruction("TRY_END", offset);
     case OP_THROW: return simpleInstruction("THROW", offset);
     case OP_SPAWN: return byteInstruction("SPAWN", chunk, offset);
+    case OP_AWAIT: return simpleInstruction("AWAIT", offset);
     case OP_IMPORT: return constantInstruction("IMPORT", chunk, offset);
     case OP_DUP: return simpleInstruction("DUP", offset);
     case OP_DUP2: return simpleInstruction("DUP2", offset);

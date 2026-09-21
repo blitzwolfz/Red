@@ -117,6 +117,13 @@ enum OpCode : uint8_t {
   OP_CHECK_LOCAL,
   // `x is T`. Pushes true or false; nothing ever fails.
   OP_IS,
+
+  // Waits for the value on top of the stack and replaces it with the
+  // result. A task is joined; an array of tasks is joined in order and
+  // becomes an array of results; anything else is already a result and
+  // is left alone, so `await` can be written in front of a call whose
+  // author may or may not have made it a task.
+  OP_AWAIT,
 };
 
 // Source lines are stored as runs rather than one int per byte. Straight

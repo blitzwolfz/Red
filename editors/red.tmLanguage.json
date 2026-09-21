@@ -115,7 +115,7 @@
       "patterns": [
         {
           "name": "keyword.control.red",
-          "match": "\\b(if|else|switch|case|default|for|while|break|continue|return|throw|try|catch|finally|spawn|import|in|as)\\b"
+          "match": "\\b(if|else|switch|case|default|for|while|break|continue|return|throw|try|catch|finally|spawn|async|await|import|in|as)\\b"
         },
         {
           "name": "keyword.operator.word.red",

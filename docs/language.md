@@ -866,13 +866,19 @@ import "util.redc" as util;
 
 ## Tasks and channels
 
-`spawn` runs a call on its own task. A task is an operating system thread.
+`spawn` runs a call on its own task. A task is a green thread: its own
+stack, scheduled onto a small set of operating system threads rather than
+getting one each. Spawning one is cheap enough to do per connection, per
+request or per item.
 
 ```red
 fun work(n) { return n * n; }
 const task = spawn work(9);
 print(task.join());        // 81
 ```
+
+[docs/concurrency.md](concurrency.md) describes the scheduler, what
+happens when a task waits, and how to see what it is doing.
 
 `join` waits for the task and gives back its result. If the task failed,
 `join` raises the error the task raised, with the kind and payload it was
@@ -913,8 +919,60 @@ fun worker(jobs, results) {
 }
 ```
 
-Channel methods: `send` `recv` `try_recv` `close` `len` `is_closed`.
-Task methods: `join` `is_done`.
+Channel methods: `send` `try_send` `recv` `try_recv` `close` `len`
+`is_closed`. Task methods: `join` `is_done`.
+
+`select` takes from whichever of several channels has something first,
+and says which one it came from:
+
+```red
+const picked = select([requests, shutdown], 5);   // 5 second timeout
+if (picked == nil) { return; }                    // timed out, or all closed
+const [source, value] = picked;
+```
+
+### async and await
+
+`await` waits for a task and gives its result. It is `join`, written
+where the value is wanted rather than where the task was made.
+
+```red
+print(await spawn work(9));    // 81
+```
+
+`async f(x)` is another spelling of `spawn f(x)`; it reads better
+alongside `await`, while `spawn` reads better when nobody waits.
+
+`async { ... }` runs a block as a task, which saves writing the block as
+a function only to call it once. The block closes over what it can see,
+the same as any other function.
+
+```red
+const total = async {
+  let sum = 0;
+  for (let n in numbers) { sum += expensive(n); }
+  return sum;
+};
+
+doSomethingElse();
+print(await total);
+```
+
+`await` on an array waits for every task in it and gives an array of
+results in the same order. The tasks are already running, so this waits
+for the slowest rather than for the sum of them:
+
+```red
+let pages = [];
+for (let url in urls) { pages.push(async fetch(url)); }
+const bodies = await pages;
+```
+
+`await` on anything that is not a task gives it back unchanged, so it can
+be written in front of a call without knowing whether that call spawns.
+
+An error raised inside a task surfaces where it is awaited, with its kind
+and payload intact.
 
 Tasks share one heap and can compute at the same time. A task's stack is
 private; operations on the same mutable value are serialised so that an
@@ -1006,8 +1064,10 @@ bitAnd         -> shift ( "&" shift )*
 shift          -> term ( ( "<<" | ">>" ) term )*
 term           -> factor ( ( "+" | "-" ) factor )*
 factor         -> unary ( ( "*" | "/" | "%" ) unary )*
-unary          -> ( "!" | "-" | "~" ) unary | spawn
-spawn          -> "spawn" call "(" arguments? ")" | call
+unary          -> ( "!" | "-" | "~" ) unary | "await" unary | spawn
+spawn          -> ( "spawn" | "async" ) call "(" arguments? ")"
+                | "async" block
+                | call
 call           -> primary ( "(" arguments? ")"
                           | "." IDENT
                           | "[" expression "]" )*
@@ -1041,10 +1101,11 @@ no form for one.
 ## Reserved words
 
 ```
-and    as       break  case   catch  class   const  continue
-default else    enum   false  finally for    fun    if
-import in      is      let    nil     or     return spawn
-super  this    throw   true   try     switch while
+and    as       async  await  break   case   catch  class
+const  continue default else   enum    false  finally for
+fun    if       import in     is      let    nil     or
+return spawn    super  this   throw   true   try     switch
+while
 ```
 
 The type names are ordinary globals rather than reserved words, so a

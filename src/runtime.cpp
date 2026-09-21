@@ -252,6 +252,7 @@ Runtime::Runtime() {
 
   initString = internString("init");
   messageString = internString("message");
+  joinString = internString("join");
   strString = internString("str");
   eqString = internString("eq");
   runtimeKind = internString("runtime");
@@ -679,6 +680,7 @@ void Runtime::markRoots() {
 
   markObject((Obj*)initString);
   markObject((Obj*)messageString);
+  markObject((Obj*)joinString);
   markObject((Obj*)strString);
   markObject((Obj*)eqString);
   markObject((Obj*)runtimeKind);

@@ -12,7 +12,7 @@ endif
 syn keyword redKeyword     and or not in as is
 syn keyword redConditional if else switch case default
 syn keyword redRepeat      for while
-syn keyword redStatement   break continue return throw spawn import
+syn keyword redStatement   break continue return throw spawn async await import
 syn keyword redException   try catch finally
 syn keyword redDeclaration let const fun class enum
 syn keyword redBoolean     true false

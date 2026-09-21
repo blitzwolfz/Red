@@ -348,6 +348,7 @@ class Compiler {
   bool breakRunsFinally() const;
 
   void function(FunctionKind kind, const std::string& name);
+  void functionFromBlock(const std::string& name);
   void method();
 
   // ---- expressions ----
@@ -381,6 +382,8 @@ class Compiler {
   void thisExpr(bool canAssign);
   void superExpr(bool canAssign);
   void spawnExpr(bool canAssign);
+  void asyncExpr(bool canAssign);
+  void awaitExpr(bool canAssign);
 
   static const ParseRule* getRule(TokenType type);
 };
@@ -1237,6 +1240,39 @@ void Compiler::method() {
   function(kind, name);
   emitByte(OP_METHOD);
   emitShort(constant);
+}
+
+// A function of no parameters whose body is the block at the cursor.
+// `async { ... }` is the only thing that needs one, and it needs it to
+// be a real closure so that the block sees the surrounding variables.
+void Compiler::functionFromBlock(const std::string& name) {
+  AllowCalls allowCalls(*this);
+  FunctionState state;
+  state.enclosing = state_;
+  state.kind = FunctionKind::Function;
+  state.function = runtime_.newFunction(module_);
+  runtime_.pushRoot((Obj*)state.function);
+  state.function->name = runtime_.internString(name);
+  state.locals.push_back({"", 0, false, true});
+  state_ = &state;
+  beginScope();
+
+  consume(TokenType::LeftBrace, "Expect '{' after 'async'.");
+  block();
+
+  emitReturn();
+  closeLocalNames(state);
+  state.function->slotCount = state.maxLocals + state.maxTemps + 8;
+  ObjFunction* function = state.function;
+  state_ = state.enclosing;
+  runtime_.popRoot();
+
+  emitByte(OP_CLOSURE);
+  emitShort(makeConstant(objValue((Obj*)function)));
+  for (int i = 0; i < function->upvalueCount; i++) {
+    emitByte(state.upvalues[i].isLocal ? 1 : 0);
+    emitByte(state.upvalues[i].index);
+  }
 }
 
 void Compiler::function(FunctionKind kind, const std::string& name) {
@@ -2286,6 +2322,33 @@ void Compiler::spawnExpr(bool) {
   emitBytes(OP_SPAWN, argCount);
 }
 
+// `async { ... }` is a block that runs as a task, and is worth having
+// because the alternative -- writing the block as a function and
+// spawning it -- puts the machinery in front of the work.
+//
+// `async f(x)` is accepted too, and means exactly what `spawn f(x)`
+// means. Both spellings exist because `await` reads better against
+// `async`, and because `spawn` says the right thing when the result is
+// never waited for.
+void Compiler::asyncExpr(bool canAssign) {
+  if (!check(TokenType::LeftBrace)) {
+    spawnExpr(canAssign);
+    return;
+  }
+  // The block becomes the body of a function of no arguments, which is
+  // then spawned. Whatever it closes over it closes over in the ordinary
+  // way, so the task sees the variables the surrounding code sees.
+  functionFromBlock("async");
+  emitBytes(OP_SPAWN, 0);
+}
+
+// `await e`. Binds like the other prefix operators, so `await f() + 1`
+// waits for the call and then adds, which is what it looks like.
+void Compiler::awaitExpr(bool) {
+  parsePrecedence(Precedence::Unary);
+  emitByte(OP_AWAIT);
+}
+
 // ---------------------------------------------------------------------
 
 const ParseRule* Compiler::getRule(TokenType type) {
@@ -2362,6 +2425,8 @@ const ParseRule* Compiler::getRule(TokenType type) {
       /* Finally      */ {nullptr, nullptr, Precedence::None},
       /* Question     */ {nullptr, nullptr, Precedence::None},
       /* Is           */ {nullptr, &Compiler::isExpr, Precedence::Comparison},
+      /* Async        */ {&Compiler::asyncExpr, nullptr, Precedence::None},
+      /* Await        */ {&Compiler::awaitExpr, nullptr, Precedence::None},
       /* Error        */ {nullptr, nullptr, Precedence::None},
       /* Eof          */ {nullptr, nullptr, Precedence::None},
   };

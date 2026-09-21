@@ -174,6 +174,8 @@ class VM {
   bool getIndex();
   bool setIndex();
   bool spawnTask(int argCount);
+  // Replaces the value on top of the stack with what it is waiting for.
+  bool awaitValue();
   bool importModule(ObjString* path);
 
   // Builds an error value and hands it to raise().

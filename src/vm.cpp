@@ -772,6 +772,54 @@ bool VM::spawnTask(int argCount) {
   return true;
 }
 
+bool VM::awaitValue() {
+  Value subject = peek(0);
+
+  // One task: exactly join(), including raising again whatever the task
+  // raised.
+  if (isTask(subject)) return invoke(runtime_.joinString, 0);
+
+  // An array: every task in it, in order, replaced by its result. This
+  // is what `await [a, b, c]` is for -- the tasks are already running,
+  // so waiting for them one after another waits for the slowest rather
+  // than for the sum.
+  if (isArray(subject)) {
+    bool anyTasks = false;
+    for (Value entry : asArray(subject)->items) {
+      if (isTask(entry)) {
+        anyTasks = true;
+        break;
+      }
+    }
+    // An array with no tasks in it is already a result. Left alone
+    // rather than copied, because copying it would be a surprise.
+    if (!anyTasks) return true;
+
+    ObjArray* results = runtime_.newArray();
+    GCRoot resultsRoot(runtime_, (Obj*)results);
+    // The subject is still on the stack below us, so it stays reachable
+    // while this runs and the index is re-read each time round.
+    size_t count = asArray(subject)->items.size();
+    for (size_t i = 0; i < count; i++) {
+      Value entry = asArray(peek(0))->items[i];
+      if (!isTask(entry)) {
+        results->items.push_back(entry);
+        continue;
+      }
+      push(entry);
+      if (!invoke(runtime_.joinString, 0)) return false;
+      results->items.push_back(pop());
+    }
+    pop();
+    push(objValue((Obj*)results));
+    return true;
+  }
+
+  // Anything else is already a result. Leaving it alone is what lets
+  // `await f(x)` be written without knowing whether f spawns.
+  return true;
+}
+
 bool VM::importModule(ObjString* path) {
   std::string base = directoryOf(std::string(currentModule()->path->chars,
                                              currentModule()->path->length));
@@ -1448,6 +1496,11 @@ InterpretResult VM::runLoop(int baseFrame) {
       case OP_SPAWN: {
         int argCount = READ_BYTE();
         CHECK(spawnTask(argCount))
+        break;
+      }
+
+      case OP_AWAIT: {
+        CHECK(awaitValue())
         break;
       }
 
