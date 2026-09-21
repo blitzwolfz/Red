@@ -125,6 +125,7 @@ stack that is not moving and can be scanned safely.
 | [`src/table.cpp`](src/table.cpp) | Hash tables for globals, fields and maps. |
 | [`src/debug.cpp`](src/debug.cpp) | The disassembler, shared with `--trace`. |
 | [`src/stdlib/`](src/stdlib) | Built-in functions and methods. |
+| [`selfhost/redc.red`](selfhost/redc.red) | The same compiler, written in Red. |
 | [`legacy/`](legacy) | The v1 interpreter, in Java, still working. |
 
 ## The language
@@ -281,7 +282,8 @@ print(output.split("\n").len());
 | [docs/language.md](docs/language.md) | Language reference and grammar. |
 | [docs/bytecode.md](docs/bytecode.md) | The instruction set. |
 | [docs/stdlib.md](docs/stdlib.md) | Built-in functions and methods. |
-| [docs/bootstrapping.md](docs/bootstrapping.md) | Plan for removing the C++ dependency. |
+| [docs/bootstrapping.md](docs/bootstrapping.md) | How the C++ dependency is being removed. |
+| [selfhost/README.md](selfhost/README.md) | The compiler written in Red, and how to bootstrap it. |
 
 ## Known limits
 
@@ -289,9 +291,6 @@ print(output.split("\n").len());
   [Why](docs/design.md#concurrency).
 - The collector stops the world and does not move objects.
 - Type annotations are parsed and ignored.
-- There is no compiled file format yet, so every run compiles from
-  source. That is the next milestone, and the last thing between here and
-  a self-hosted compiler. See [docs/bootstrapping.md](docs/bootstrapping.md).
 - Code that makes many distinct strings is slow, because every string is
   interned. Reusing a small vocabulary is fast.
 - A task that is never joined is kept alive until the program ends.

@@ -3,7 +3,9 @@
 A goal for Red is to stop depending on C++. This file describes what that
 would mean, what is already in place, and what is still missing.
 
-Nothing here is built yet. This is a plan, not a status report.
+Stages 1 to 3 are finished. The compiler is written in Red, it reproduces
+itself, and the whole test suite passes on bytecode it produced. Stage 4,
+the virtual machine, has not been started and is a much larger job.
 
 ## What "without C++" means
 
@@ -66,8 +68,9 @@ is now closed.
 
 [`examples/mini_compiler.red`](../examples/mini_compiler.red) is a
 working compiler and virtual machine for arithmetic, written in Red. It
-is small on purpose, but it is built the same way the real one will be,
-and it uses every part of the language the port depends on:
+was the rehearsal for the real port: small on purpose, but built the same
+way, and using every part of the language the port turned out to depend
+on:
 
 - an `enum` for token kinds and another for opcodes, used as array
   indexes and as `switch` cases
@@ -79,8 +82,8 @@ and it uses every part of the language the port depends on:
 - destructuring to unpack a rule and a compiler's result
 - error kinds to tell a bad input program from a bug in the compiler
 
-It runs. So the language is not what is in the way, and now neither is
-the toolchain.
+It runs, and so does the real thing it was a rehearsal for. Nothing in the
+language was in the way.
 
 ### Speed is not a gap either
 
@@ -147,9 +150,10 @@ and reads it back.
 
 ### Stage 3: the self-hosted compiler
 
-Write the scanner, the compiler and the `.redc` writer in Red. Port them
-from the C++ rather than redesigning them. The shape of the current
-compiler is deliberately plain so that this port is mechanical.
+**Finished.** [`selfhost/redc.red`](../selfhost/redc.red) is the scanner,
+the compiler and the `.redc` writer, in Red. It is a port of the C++ and
+not a redesign, which is what made it mechanical: the C++ compiler was
+kept deliberately plain for exactly this.
 
 The test is the usual one for a self-hosting compiler:
 
@@ -158,11 +162,38 @@ The test is the usual one for a self-hosting compiler:
 3. Compile the Red compiler a third time, using **B**. Call it **C**.
 4. **B** and **C** must be byte for byte identical.
 
-If they are, the compiler reproduces itself, and the C++ compiler is no
-longer needed. It stays in the repository as the thing that started the
-chain, the same way `legacy/` stays.
+They are. [`selfhost/bootstrap.sh`](../selfhost/bootstrap.sh) runs all
+four steps, and then two checks the classic test does not ask for: every
+Red program in the repository is compiled by both compilers and the
+results compared, and the whole conformance suite is compiled by **B** and
+run.
 
-**Done when** step 4 passes and the full test suite passes using **B**.
+```
+$ selfhost/bootstrap.sh
+B and C are identical. The compiler reproduces itself.
+A and B are identical too: the two compilers agree byte for byte.
+42 identical, 0 different
+29/29 tests passed (compiled by the self-hosted compiler)
+```
+
+**A** and **B** being identical is a stronger result than the one the
+stage asked for. It says the two compilers do not merely each reproduce
+themselves, they agree with each other, on every Red program in the
+repository. That is the property worth protecting from here on.
+
+The whole thing is one file. `import` is resolved when a program runs, not
+when it is compiled, so a compiler split across modules would still pull
+its own parts through the C++ compiler at start-up and the bootstrap would
+prove nothing about them.
+
+The compiler compiles itself in about 90ms.
+[`selfhost/README.md`](../selfhost/README.md) covers the parts of the port
+that needed thought, chiefly writing a double without being able to look
+at its bits.
+
+So the C++ compiler is no longer needed. It stays in the repository as the
+thing that started the chain, the same way `legacy/` stays, and as the
+second opinion that the bootstrap script compares against.
 
 ### Stage 4: the virtual machine
 
@@ -191,20 +222,30 @@ runtime is not. Saying so plainly is better than claiming more.
 
 ## Order of work
 
-Stages 1 and 2 are both finished. Stage 3 is next, and it is the real
-milestone. Stage 4 should only start once stage 3 is finished and stable.
+Stages 1, 2 and 3 are finished. Stage 4 should only start once stage 3 is
+stable, and it may never be worth starting at all.
 
 Stage 1 was deliberately left until after the language changes. Writing
-the serialiser first would have frozen the opcode list exactly when it
-was about to gain fifteen instructions across two rounds.
+the serialiser first would have frozen the opcode list exactly when it was
+about to gain fifteen instructions across two rounds.
 
-That is now the thing to watch. The format is at version 3, having moved
-three times while the language was being filled in. From here it should
-stop moving. Every change to it makes the C++ compiler and the
-self-hosted one drift apart, and the whole point of stage 3 is that they
-agree byte for byte.
+## What to protect now
 
-The thing to protect along the way is the bytecode format. Every change to
-it makes the self-hosted compiler and the C++ compiler drift apart. Once
-stage 3 starts, the format version in `src/common.h` should change rarely,
-and every change should be written down.
+There are two compilers, and the value of that is entirely in their
+agreeing. Three things keep them in step.
+
+**The bytecode format.** It is at version 3, having moved three times
+while the language was being filled in. It should now stop moving. Every
+change to `kBytecodeVersion` in `src/common.h` needs the same change in
+`BYTECODE_VERSION` in `selfhost/redc.red`, and a line in
+[bytecode.md](bytecode.md).
+
+**The opcode and token orders.** Both are the format, not an
+implementation detail: the parse rule table is indexed by a token's
+position and every instruction is its number. New members go at the end of
+the list, never in the middle. Both files say so where it matters.
+
+**The bootstrap script in continuous integration.** A change to
+`src/compiler.cpp` that is not mirrored in `selfhost/redc.red` shows up as
+a byte difference on the next run, which is much easier to read than a
+test failing somewhere downstream.

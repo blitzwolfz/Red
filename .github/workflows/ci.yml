@@ -49,6 +49,13 @@ jobs:
       - name: Tests compiled ahead of time
         run: python3 tests/run.py --red build/red --tests tests --compiled
 
+      # Compiles the Red compiler with itself three times and checks that
+      # the last two results are identical, then compiles the whole suite
+      # with it. A change to src/compiler.cpp that is not mirrored in
+      # selfhost/redc.red shows up here as a byte difference.
+      - name: Bootstrap the self-hosted compiler
+        run: ./selfhost/bootstrap.sh
+
       - name: Examples
         run: |
           ./build/red examples/tour.red

@@ -49,21 +49,29 @@ def parse_expectations(path):
     return output, runtime_errors, compile_errors
 
 
-def compile_ahead(red, path):
-    """Compiles a test to a .redc beside it. Returns the compiled path."""
+def compile_ahead(red, path, selfhost=None):
+    """Compiles a test to a .redc beside it. Returns the compiled path.
+
+    With selfhost set, the compiling is done by the Red compiler written in
+    Red rather than by the built-in C++ one.
+    """
     compiled = path[:-4] + ".redc"
+    if selfhost:
+        command = [red, selfhost, "compile", path, "-o", compiled]
+    else:
+        command = [red, "compile", path, "-o", compiled]
     result = subprocess.run(
-        [red, "compile", path, "-o", compiled],
+        command,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,
     )
     if result.returncode != 0:
         return None
     return compiled
 
 
-def run_one(red, path, extra_args, compiled=False):
+def run_one(red, path, extra_args, compiled=False, selfhost=None):
     expected, runtime_errors, compile_errors = parse_expectations(path)
     path = os.path.abspath(path)
 
@@ -72,7 +80,7 @@ def run_one(red, path, extra_args, compiled=False):
         # A test that is meant not to compile has nothing to run.
         if compile_errors:
             return []
-        temporary = compile_ahead(red, path)
+        temporary = compile_ahead(red, path, selfhost)
         if temporary is None:
             return ["could not compile ahead of time"]
         path = temporary
@@ -143,6 +151,13 @@ def main():
         action="store_true",
         help="compile each test to a .redc first, then run that",
     )
+    parser.add_argument(
+        "--selfhost",
+        default="",
+        metavar="REDC",
+        help="compile each test with the Red compiler written in Red "
+        "(selfhost/redc.red, or a .redc built from it). Implies --compiled",
+    )
     parser.add_argument("--filter", default="", help="only run matching names")
     args = parser.parse_args()
 
@@ -151,6 +166,8 @@ def main():
     # interpreter has to be named absolutely.
     red = os.path.abspath(args.red)
     extra = ["--gc-stress"] if args.gc_stress else []
+    selfhost = os.path.abspath(args.selfhost) if args.selfhost else None
+    compiled = args.compiled or selfhost is not None
 
     paths = []
     for root, _, names in os.walk(args.tests):
@@ -170,7 +187,7 @@ def main():
     failed = []
     for path in paths:
         name = os.path.relpath(path, args.tests)
-        failures = run_one(red, path, extra, args.compiled)
+        failures = run_one(red, path, extra, compiled, selfhost)
         if failures:
             failed.append((name, failures))
             print(f"{RED}FAIL{OFF} {name}")
@@ -184,7 +201,9 @@ def main():
     modes = []
     if args.gc_stress:
         modes.append("gc stress")
-    if args.compiled:
+    if selfhost:
+        modes.append("compiled by the self-hosted compiler")
+    elif compiled:
         modes.append("compiled ahead of time")
     mode = " (" + ", ".join(modes) + ")" if modes else ""
     print(f"\n{passed}/{total} tests passed{mode}")
