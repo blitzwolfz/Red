@@ -27,8 +27,8 @@ path         requests
 The finished program is in [`examples/logstat/`](../examples/logstat),
 and every listing below is a real part of it. It is a small program, but
 it is a whole one: arguments, modules, files, errors, tasks, output, exit
-codes and tests. That is the point. The language reference tells you what
-`switch` does; this tells you how the pieces sit together.
+codes and tests. The language reference tells you what `switch` does.
+This is about how the pieces sit together.
 
 Work through it in order, or read [the finished
 program](../examples/logstat/logstat.red) first and come back for the
@@ -37,7 +37,7 @@ parts that look odd.
 - [Before you start](#before-you-start)
 - [1. A program that runs](#1-a-program-that-runs)
 - [2. Laying out a project](#2-laying-out-a-project)
-- [3. The part worth testing](#3-the-part-worth-testing)
+- [3. Where the decisions live](#3-where-the-decisions-live)
 - [4. Tests](#4-tests)
 - [5. Reading files, and failing well](#5-reading-files-and-failing-well)
 - [6. The command line](#6-the-command-line)
@@ -56,7 +56,7 @@ parts that look odd.
 That builds the interpreter into `build/red` and runs the test suite. If
 something is missing it says what and how to install it.
 
-Two things are worth having open while you work.
+Keep two things open while you work.
 
 ```bash
 ./build/red repl
@@ -80,8 +80,8 @@ than a `.redc`, because a compiled file carries no names.
 ```
 
 That prints every instruction and the stack as it runs. Below the
-debugger, and worth reaching for when the question is about the bytecode
-rather than about the program.
+debugger. Reach for it when your question is about the bytecode, not
+about the program.
 
 ## 1. A program that runs
 
@@ -116,7 +116,7 @@ hello, ada
 hello, grace
 ```
 
-Two conventions are worth adopting from the first line you write.
+Adopt two conventions from the first line you write.
 
 **Put the work in a `main` function and return a status.** Top level code
 cannot use `return`, so a program written directly at the top level ends
@@ -177,8 +177,8 @@ values into other values can be tested by calling it.
 
 A module's body runs once, the first time it is imported, and later
 imports get the same module back. Two modules may import each other: the
-second one to start sees the first in its partly built state rather than
-looping forever.
+second one to start sees the first half-built. Better than looping
+forever, which is the other option.
 
 For libraries that are not part of your project — your own, or the ones
 that ship with Red — see [libraries.md](libraries.md). `logstat` uses one:
@@ -190,7 +190,7 @@ import "cli.red" as cli;
 That file is not next to `logstat.red`. It is found on the library search
 path, and `library_paths()` prints where the interpreter looked.
 
-## 3. The part worth testing
+## 3. Where the decisions live
 
 Start with the values, not with the input or the output.
 
@@ -244,9 +244,9 @@ line in it is ordinary, not exceptional, so a line that does not parse
 comes back as `nil` and the caller counts it. Section 5 is about the
 cases that should throw.
 
-`num()` is the reason the checks are cheap: it gives `nil` rather than
-zero when the whole string is not a number, so `num("oops")` and
-`num("0")` are not confusable.
+The checks are cheap because of `num()`. A string that is not entirely a
+number gives `nil`, not zero, so `num("oops")` and `num("0")` can never
+be confused.
 
 Then the thing that accumulates:
 
@@ -301,8 +301,8 @@ section 8, and it costs nothing to add now.
 
 `entries()` gives each pair as a two element array, and the
 `for (let [k, v] in ...)` form destructures it in the loop header, which
-is why the body reads like a table rather than like `pair[0]` and
-`pair[1]`.
+is why the body reads like a table. No `pair[0]` and `pair[1]`
+anywhere.
 
 Sorting needs one more thought than it looks like:
 
@@ -367,7 +367,7 @@ Test the module, not the program. `parse.red` is where the decisions are;
 `logstat.red` moves values between it and the terminal, and testing that
 means testing `print`.
 
-Three flags are worth knowing.
+Three flags matter.
 
 ```bash
 red test tests --gc-stress
@@ -446,7 +446,7 @@ try {
 ```
 
 `finally` runs on every way out of a `try`, including a `return` from
-inside it, which is what makes it the right place to close things:
+inside it. That is why it is where you close things:
 
 ```red
 const handle = open(path, "r");
@@ -526,7 +526,7 @@ if (top == nil or top < 1) {
 ```
 
 `options.number()` is `num()` on the string, so a value that is not a
-number is `nil` rather than zero.
+number comes back `nil`, not zero.
 
 Reading standard input when no files are named costs four lines and makes
 the program compose with everything else:
@@ -544,8 +544,8 @@ fun readStandardInput() {
 }
 ```
 
-`input()` gives `nil` at the end of input, and an empty string for a
-blank line. They are different on purpose.
+`input()` gives `nil` at the end of input and an empty string for a blank
+line. Those are two different things and the difference matters.
 
 ## 7. Printing
 
@@ -559,8 +559,8 @@ print("lines     ${report.lines}");
 
 Anything can go in `${}` — it is compiled as `"..." + str(x) + "..."`.
 
-Columns line up with `pad_right` and `pad_left`, and the trick is to
-measure first rather than to guess a width:
+Columns line up with `pad_right` and `pad_left`. Measure the width
+first; do not guess it:
 
 ```red
 let width = 4;
@@ -573,12 +573,12 @@ for (let [path, count] in rows) {
 }
 ```
 
-Neither pad ever truncates: something already wider than the column is
-returned unchanged, so one long path pushes the row out rather than being
-cut in half.
+Neither pad truncates. Anything already wider than the column comes back
+unchanged, so one long path pushes the row out. It never loses its
+second half.
 
-If the output is going to be read by another program, give it a flag of
-its own rather than making the table machine readable:
+If another program is going to read the output, give it a flag of its
+own. Do not make the human table machine readable:
 
 ```red
 if (options.flag("json")) {
@@ -640,13 +640,15 @@ $ echo $?
 74
 ```
 
-Now the honest part. **Two tasks do not compute at the same time.** One
-lock guards the heap and a task holds it while it runs bytecode. What
-tasks do buy you is waiting in parallel: a task releases the lock before
-anything that blocks, so reading ten files overlaps ten waits on the
-disk, and a server handles many connections at once. Parsing ten files
-does not get ten times faster. [design.md](design.md#concurrency) explains
-why it is built that way.
+Now the part that disappoints people. **Two tasks do not compute at the
+same time.** One lock guards the heap, and a task holds it the whole time
+it is running bytecode.
+
+What you get is parallel *waiting*. A task drops the lock before anything
+that blocks, so reading ten files overlaps ten waits on the disk and a
+server handles many connections at once. Parsing those ten files, though,
+takes exactly as long as parsing them one after another.
+[design.md](design.md#concurrency) explains why it was built this way.
 
 Channels are how tasks that are not simply joined talk to each other:
 
@@ -673,12 +675,10 @@ const report = parse.readFile(path);
 print("${clock() - start}s");
 ```
 
-`clock()` is processor time, which is what you want for timing;
-`time()` is wall clock and moves for reasons that have nothing to do with
-your program.
+Use `clock()`. It is processor time. `time()` is the wall clock and moves
+for reasons that have nothing to do with your program.
 
-Two things about Red are worth knowing before you optimise the wrong
-thing.
+Two facts about Red, before you optimise the wrong thing.
 
 **Every string is interned.** Building many *distinct* strings is slow,
 because each one is hashed and looked up. Reusing a small vocabulary is
@@ -699,13 +699,12 @@ $ red logstat.redc access.log
 A `.redc` holds the same bytecode the compiler would have produced, so a
 program that runs for a second runs for a second either way. What it
 removes is the compiling: on a four thousand function program that is
-41ms down to 4.4ms. It is worth doing for something started often, and
-for a large library that many programs import.
+41ms down to 4.4ms. Do it for anything started often, and for a large
+library that many programs import.
 
-Two things to know about it. A compiled file records the bytecode version
-and is refused rather than misread by an interpreter that expects a
-different one, so compile as part of your build rather than committing
-the result. And a relative import in a compiled program resolves against
+Two things to know. A compiled file records its bytecode version, and an
+interpreter expecting a different one refuses it. Nothing is ever
+misread. So compile as part of your build; do not commit the result. And a relative import in a compiled program resolves against
 the `.redc`, so compile in place — `red compile logstat.red` next to
 `parse.red` — rather than into a separate directory.
 
@@ -775,7 +774,7 @@ Before you call it done:
 | [design.md](design.md) | Why the interpreter is built the way it is. |
 | [bytecode.md](bytecode.md) | The instruction set, and the compiled file format. |
 
-Programs worth reading, roughly in order of size:
+Programs to read, roughly in order of size:
 
 | | |
 |---|---|

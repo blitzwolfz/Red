@@ -32,8 +32,8 @@ file is about it.
 **I don't want a runtime at all: no collector, no tagged values.** This
 is not a compilation strategy, it is a different language. Manual memory
 management or ownership, static types, no `map` that can hold anything.
-Red would not be Red afterwards. Worth saying out loud because it is
-sometimes what is meant, and no backend delivers it.
+Red would not be Red afterwards. Saying it out loud because people
+sometimes do mean this, and no backend delivers it.
 
 ## Where the time actually goes
 
@@ -73,8 +73,8 @@ So the ceiling on a naive native backend is: remove dispatch, keep
 everything else. On the tightest arithmetic loop, where dispatch is
 perhaps half the cost, that is a bit less than 2x. On code that touches
 objects, calls methods and builds strings — which is to say on programs —
-it is 10 to 20%. That is the honest number, and it is not what anyone
-hopes for when they ask for a native compiler.
+it is 10 to 20%. Not what anyone hopes for when they ask for a native
+compiler, but it is the number.
 
 ## What Red makes easy
 
@@ -137,8 +137,7 @@ and the standard library. Gets the 10 to 20% above. Costs a code
 generator per architecture, a relocation and linking story, stack maps
 for the collector, and a debugging experience that gets worse before it
 gets better. **Verdict: the worst ratio of the four.** It is the route
-people imagine when they say "compiler", and it is the one that buys
-least.
+people picture when they say "compiler", and it buys the least.
 
 **Bytecode to C.** Emit a C function per Red function, with the runtime
 called for everything interesting, and hand the result to the system C
@@ -148,7 +147,7 @@ architecture a C compiler targets, and the C compiler does the register
 allocation and instruction selection that a first-attempt backend would
 do badly. The collector problem is easier too, because the values can be
 kept in a frame the runtime can still see. It produces a real binary,
-which answers the packaging wish honestly rather than by stapling files
+which answers the packaging wish properly, with no files stapled
 together. **Verdict: if a native backend happens, this is the one.** The
 speed is similar to the previous route; the cost is a fifth.
 
@@ -159,8 +158,8 @@ assumes so, with a guard. This is where the real numbers are — 5 to 10x
 is not unreasonable on hot loops. It is also years of work, and it brings
 deoptimisation, tiering, and a class of bug where the fast path and the
 slow path disagree and the program quietly computes the wrong answer.
-**Verdict: the honest answer to "make it fast", and out of proportion to
-this project.**
+**Verdict: the real answer to "make it fast", and far out of proportion
+to this project.**
 
 **Static types, and a real compiler.** Type annotations exist in the
 grammar and are ignored. Checking them, inferring the rest, and
@@ -170,9 +169,9 @@ Not this project.**
 
 ## What to do instead, and why it is not a consolation prize
 
-Every measurement above points at the runtime rather than the loop. The
-same changes a native backend would eventually need are worth more on
-their own, sooner, and can be done one at a time:
+Every measurement above points at the runtime, not at the loop. A native
+backend would need these changes anyway, and each is worth more on its
+own, sooner, and can be done alone:
 
 **Inline caches on property and method lookup.** ~~A field read is 13ns
 and a method call 26ns, mostly hash probing.~~ Also tried, in the
@@ -186,8 +185,7 @@ bought nothing.
 That leaves the field read itself, which would need hidden classes to
 improve, and that is a much larger change than "two hundred lines".
 
-**Stop interning every string.** Done, in 0.4.0, and it is the one that
-worked. Strings of one or two characters are still shared; longer ones
+**Stop interning every string.** Done in 0.4.0, and it worked. Strings of one or two characters are still shared; longer ones
 are allocated outright and compare by hash and contents. Building a
 string went from 297ns to 230ns, and the `string` benchmark from 5.6
 times CPython to 3.5. Everything else stayed where it was.
@@ -198,8 +196,8 @@ and it made things worse: calls and arithmetic lost 5 to 12%, because a
 boxed double arrives in an integer register and every operation has to
 move it to a floating point one and back. Method dispatch gained 5%. Net,
 a loss. [design.md](design.md#value-layout) has the table. Struck out
-rather than deleted, because a prediction that turned out wrong is worth
-more on the page than a prediction quietly removed.
+out, not deleted: a prediction that turned out wrong earns its place on
+the page. A prediction quietly removed teaches nobody anything.
 
 **Computed-goto dispatch.** Replaces the switch with a jump table
 threaded through each instruction, which removes one indirect branch and
@@ -208,7 +206,7 @@ behind a compiler check. Still untested, and now the only one of these
 four that is.
 
 **Nothing in the dispatch loop that does not have to be there.** This one
-was not on the list, and it is the one that worked. The loop began each
+was never on the list, and it worked. The loop began each
 instruction by testing `runtime_.traceExecution`, for a tracer almost
 nobody runs. Adding a second such test, for the debugger, cost 30% on a
 tight loop. Compiling both out instead — the loop is a template over a
@@ -223,20 +221,20 @@ thing.
 
 Four of those five have now been tried. Two worked, two did not, and
 computed-goto dispatch is still untested. That is a worse hit rate than
-this file originally implied, and it sharpens the point rather than
-blunting it: if changes this targeted, guided by these measurements, are
+this file first implied, and it sharpens the point: if changes this
+targeted, guided by these measurements, are
 mostly not paying off, a native backend guided by the same measurements
 is not going to pay off either.
 
-The honest summary is that the interpreter is closer to its floor than it
+The summary is that the interpreter is closer to its floor than it
 looked. Getting past that floor needs a different value representation or
 type feedback, not a different way of reaching the same runtime.
 
-## The smallest honest experiment
+## The one experiment left
 
 Steps 1 and 2 of what this file first proposed have been run, and are
 written up above: the inline cache bought nothing, NaN boxing lost.
-What is left is the one that would actually settle it:
+What is left is the one that would settle it:
 
 Take one benchmark — `loop.red` is the most favourable case — and write
 by hand the C that a transpiler would emit for it. Compile it, link it
@@ -263,6 +261,6 @@ the others sit, and it is not a half-finished state on the way to
 somewhere. Saying "the compiler is self-hosted, the runtime is C++" is a
 complete description of a real language.
 
-The C backend stays interesting, for distribution rather than for speed.
+The C backend stays interesting, for distribution, not for speed.
 The JIT stays interesting as a thing to read about. The inline caches are
 the next real work.

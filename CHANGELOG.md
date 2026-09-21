@@ -4,6 +4,57 @@ Red follows no release schedule. The bytecode format has a version of its
 own, tracked in [docs/bytecode.md](docs/bytecode.md), and a `.redc` built
 by one version is refused rather than misread by another.
 
+## 0.4.0
+
+Bytecode format: **3**, unchanged. Every `.redc` built by 0.2.0 still
+runs, and extensions built against 0.3.0 still load.
+
+### Added
+
+- `red debug program.red`. Stops on lines; `s` steps into a call, `n`
+  over it, `f` out of it, `b` sets a breakpoint, `v` lists the locals in
+  the frame by name, `p` prints one, `bt` shows the stack. Needs the
+  source: a `.redc` has no names in it.
+- `red fmt`. Re-indents and re-spaces, does not re-wrap. `-w` rewrites in
+  place, `--check` reports what would change. It lexes its own output and
+  refuses if the tokens differ, so a bug in it cannot mangle a file.
+  Every `.red` file here is formatted with it and CI checks that.
+- A language server, [`tools/red-lsp.red`](tools/red-lsp.red), written in
+  Red: diagnostics, document symbols, go to definition, hover,
+  completion. [editors/README.md](editors/README.md) has the settings.
+- `read(count)` on a file handle, and `exe_path()`.
+
+### Changed
+
+- **`upper()` and `lower()` cover all of Unicode**, including the
+  mappings that change length: `"straße".upper()` is `"STRASSE"`. The
+  regex `i` flag uses the same tables. Code that relied on non-ASCII
+  characters passing through unchanged will see them converted.
+- **Only strings of one or two characters are interned.** Longer ones
+  compare by pointer, then hash, then contents. Building a string went
+  from 297ns to 230ns and the `string` benchmark from 5.6x CPython to
+  3.9x. Nothing visible changed; `==` still compares strings by value.
+- The dispatch loop is compiled twice, once with the debugger and tracer
+  and once without them at all. Every benchmark is 7 to 12% faster than
+  0.3.0 as a result.
+- String constants in a `.redc` are interned on load. Without that, a
+  field name longer than two characters defined in one module and used
+  from another would not have been found.
+
+### Tried and rejected
+
+Both are written up with their numbers, in
+[docs/design.md](docs/design.md#value-layout) and
+[docs/native.md](docs/native.md).
+
+- **NaN boxing.** Calls and arithmetic got 5 to 12% worse: a boxed double
+  arrives in an integer register and every operation has to move it to a
+  floating point one and back. `Value` stays sixteen bytes, and the FFI
+  keeps its layout.
+- **An inline method cache.** Measured with a single global entry that no
+  per-site cache could beat. No difference at all: method lookup is not
+  where a call's time goes.
+
 ## 0.3.0
 
 Bytecode format: **3**, unchanged. Every `.redc` built by 0.2.0 still

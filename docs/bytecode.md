@@ -25,7 +25,7 @@ Changing the version means changing three things together:
 `kBytecodeVersion` in [`src/common.h`](../src/common.h),
 `BYTECODE_VERSION` in [`selfhost/redc.red`](../selfhost/redc.red), and
 the table above. A compiled file carries the version and is refused
-rather than misread by an interpreter that expects a different one.
+by an interpreter that expects a different one. It is never misread.
 [bootstrapping.md](bootstrapping.md#what-to-protect-now) says why this
 matters more now than it did.
 
@@ -39,7 +39,7 @@ A chunk is one compiled function. It holds three things:
 | `constants` | Values the instructions refer to by index. |
 | `lines` | Source line for each byte, stored as runs. |
 
-Line numbers are stored as `(line, count)` runs rather than one number per
+Line numbers are stored as `(line, count)` runs, not one number per
 byte. Straight line code makes long runs, so this is usually much smaller
 than a parallel array. Looking a line up is a scan, which only happens
 when an error is already being reported.
@@ -173,7 +173,7 @@ scope ends, so a closure that outlives the scope still sees it.
 | `INHERIT` | | `superclass subclass -> subclass` |
 | `METHOD` | constant | `class closure -> class` |
 
-`INHERIT` copies the superclass methods into the subclass rather than
+`INHERIT` copies the superclass methods into the subclass. There is no
 chaining a lookup. Dispatch then costs one table probe at any depth. The
 cost is that changing a class after a subclass exists does not affect the
 subclass.
@@ -222,7 +222,7 @@ becomes its characters. Anything else is an error.
 `ITER_NEXT` reads the sequence and the position from the two local slots
 its operands name. It pushes the next element and advances the position,
 or jumps when the sequence is spent. The length is read on every pass, so
-a loop over an array that shrinks underneath it stops rather than reading
+a loop over an array that shrinks underneath it stops, and does not read
 past the end.
 
 The element lands on top of the stack, which is exactly the slot the loop
@@ -256,9 +256,9 @@ arguments into an array before the frame is pushed.
 clauses keeps the caught error in a hidden slot and pushes a copy of it
 for each clause to test, so each test takes its copy with it.
 
-The three destructuring instructions exist rather than reusing
+The three destructuring instructions could have reused
 `GET_INDEX` and `GET_PROPERTY` because patterns need different rules. A
-position past the end gives `nil` instead of failing, since a pattern may
+position past the end gives `nil` and does not fail, since a pattern may
 be longer than what it matches, and a field read never finds a method, so
 `let {len} = point` cannot pick one up by accident.
 
@@ -280,8 +280,8 @@ version           4 bytes, fixed width
 <function>        the top level function, and everything under it
 ```
 
-The version is fixed width on purpose, so that a file from another
-release is refused with a clear message rather than misread. Everything
+The version is fixed width by design, so a file from another release is
+refused with a clear message. Everything
 after it uses a variable length encoding: seven bits per byte, low group
 first, top bit set while more follow. Counts in a chunk are almost always
 small, so this is far smaller than four bytes each. Numbers stay eight

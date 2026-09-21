@@ -68,9 +68,8 @@ is now closed.
 
 [`examples/mini_compiler.red`](../examples/mini_compiler.red) is a
 working compiler and virtual machine for arithmetic, written in Red. It
-was the rehearsal for the real port: small on purpose, but built the same
-way, and using every part of the language the port turned out to depend
-on:
+was the rehearsal for the real port. Small by design, but built the same
+way, and it uses every part of the language the port turned out to need:
 
 - an `enum` for token kinds and another for opcodes, used as array
   indexes and as `switch` cases
@@ -88,10 +87,10 @@ language was in the way.
 ### Speed is not a gap either
 
 That was the early assumption, and measuring it showed the opposite.
-Interning is slow for many *distinct* strings, which is what the `string`
-benchmark creates, and a win for a small vocabulary used over and over,
-which is what a compiler has. On compiler shaped work Red matches
-CPython:
+Interning is slow for many *distinct* strings, which the `string`
+benchmark creates by the thousand, and a win for a small vocabulary used
+over and over, which is a compiler's whole diet. On compiler shaped work
+Red matches CPython:
 
 | Workload | Red |
 |---|--:|
@@ -114,7 +113,7 @@ intern table instead of allocating.
 `red compile app.red` writes `app.redc`, and running that file loads a
 chunk instead of compiling one. The file starts with `REDC` and a fixed
 width version, which is checked on load, so a file from another release
-is refused with a message rather than misread. The rest uses a variable
+is refused with a message instead of being misread. The rest uses a variable
 length encoding, and a compiled file is smaller than its source for
 ordinary code. [bytecode.md](bytecode.md#compiled-files) has the layout.
 
@@ -136,13 +135,13 @@ because the port in stage 3 is several thousand lines of Red and those
 decide whether it is bearable to write.
 
 The second round added the three that shape how the port is organised:
-`enum`, so a token kind prints as `TokenType.Fun` rather than `38`;
+`enum`, so a token kind prints as `TokenType.Fun` and not `38`;
 filtered `catch` clauses, so the compiler can separate a bad input
 program from a bug in itself; and destructuring, so a rule table entry
 or a multi-part result unpacks in one line.
 
 A third round added `finally`, a set type and column padding, which were
-listed here as worth having before the port rather than blocking it.
+listed here as nice to have before the port, not as blockers.
 
 [`examples/mini_compiler.red`](../examples/mini_compiler.red) is the
 rehearsal: a Red program that builds bytecode byte by byte, writes it out
@@ -152,8 +151,8 @@ and reads it back.
 
 **Finished.** [`selfhost/redc.red`](../selfhost/redc.red) is the scanner,
 the compiler and the `.redc` writer, in Red. It is a port of the C++ and
-not a redesign, which is what made it mechanical: the C++ compiler was
-kept deliberately plain for exactly this.
+not a redesign. That is what made it mechanical: the C++ compiler was
+kept plain for exactly this.
 
 The test is the usual one for a self-hosting compiler:
 
@@ -179,7 +178,7 @@ A and B are identical too: the two compilers agree byte for byte.
 **A** and **B** being identical is a stronger result than the one the
 stage asked for. It says the two compilers do not merely each reproduce
 themselves, they agree with each other, on every Red program in the
-repository. That is the property worth protecting from here on.
+repository. Protect that property from here on.
 
 The whole thing is one file. `import` is resolved when a program runs, not
 when it is compiled, so a compiler split across modules would still pull
@@ -189,8 +188,8 @@ prove nothing about them.
 The compiler compiles itself, 2,800 lines, in about 80ms. The C++
 compiler does the same file in 3.6ms. Twenty times slower is about what
 an interpreted compiler costs, and it is fast enough that the whole three
-stage bootstrap finishes in under a second, which is what decides whether
-it runs in continuous integration.
+stage bootstrap finishes in under a second, which is the difference
+between running it in CI and not.
 [`selfhost/README.md`](../selfhost/README.md) covers the parts of the port
 that needed thought, chiefly writing a double without being able to look
 at its bits.
@@ -209,7 +208,7 @@ order of how much they actually deliver:
 **Port the virtual machine to C.** This does not reach the goal, but it
 shrinks the substrate a long way, and C is available in more places than
 C++ is. The collector and the value layout are already close to C, because
-they use raw pointers and manual lifetimes on purpose. The parts that
+they were written with raw pointers and manual lifetimes. The parts that
 would need work are the object types that hold `std::vector`,
 `std::string` and `std::deque`.
 
@@ -217,8 +216,8 @@ would need work are the object types that hold `std::vector`,
 bytecode into machine code for one architecture. Red would then generate
 its own executables. The C++ virtual machine would still be needed to run
 the compiler the first time, which is the same chicken and egg problem
-that stage 3 solves, one level down. This is the honest route to "no C++",
-and it is a much bigger project than everything above it put together.
+that stage 3 solves, one level down. This is the real route to "no C++",
+and a much bigger project than everything above it put together.
 
 **Keep the virtual machine and call the goal met at stage 3.** Most
 self-hosted languages stop here. The compiler is written in itself, the
@@ -230,12 +229,12 @@ the time goes, so a native backend buys 10 to 20% for a year of work,
 while the changes it would need anyway — inline caches, cheaper strings,
 a smaller value — are worth more on their own and can be done one at a
 time. It also argues that a C backend, if one ever happens, is the one
-worth having, and for distribution rather than for speed.
+worth having, and for distribution, not for speed.
 
 ## Order of work
 
 Stages 1, 2 and 3 are finished. Stage 4 should only start once stage 3 is
-stable, and it may never be worth starting at all.
+stable, and it may never be worth starting.
 
 Stage 1 was deliberately left until after the language changes. Writing
 the serialiser first would have frozen the opcode list exactly when it was

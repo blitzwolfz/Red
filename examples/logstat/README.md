@@ -2,7 +2,7 @@
 
 A summary of one or more access logs. It is the program
 [docs/guide.md](../../docs/guide.md) builds from nothing, kept here as a
-working whole rather than as listings in a document.
+working whole, not as listings in a document.
 
 ```bash
 red logstat.red sample.log

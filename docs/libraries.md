@@ -46,8 +46,7 @@ so `import "greet.red";` also binds `greet`.
 
 A module's body runs once, the first time it is imported. Later imports
 get the same module back. Two modules may import each other: the second
-one to start sees the first in its partly built state rather than looping
-forever.
+one to start sees the first half-built. Better than looping forever.
 
 ## Where the interpreter looks
 
@@ -66,9 +65,9 @@ relative to the importer, not to the directory the program was started
 from, so a project can be moved without editing its imports.
 
 It also means a file of your own shadows a library with the same name. A
-`cli.red` next to your program is the one that `import "cli.red"` finds,
+a `cli.red` next to your program is what `import "cli.red"` finds,
 and `lib/cli.red` is never reached. That is the right way round — your
-files win — but it is worth knowing when an import suddenly resolves
+files win — but remember it when an import suddenly resolves
 somewhere unexpected. `library_paths()` and the resolved path in the
 error message are how you find out.
 
@@ -93,7 +92,7 @@ export RED_PATH=$HOME/red-libraries:/opt/red/lib
 
 A library that needs a file of its own — a data table, or an extension it
 ships with — finds it with `source_dir()`, which gives the directory of
-the file that called it rather than the working directory.
+the file that called it, not the working directory.
 
 ```red
 const words = read_file(source_dir() + "/words.txt");
@@ -209,11 +208,11 @@ directory on `RED_PATH`, is found by bare name. A name with a `/` in it is
 used exactly as written.
 
 `ffi_open` raises an error with kind `"ffi"` when the file is missing,
-which is what lets a library treat its native half as optional.
+which lets a library treat its native half as optional.
 
 ## Putting the two together
 
-[`lib/crc32.red`](../lib/crc32.red) is the pattern worth copying. The
+[`lib/crc32.red`](../lib/crc32.red) is the pattern to copy. The
 library is Red, and it works with no extension installed; when one is
 present it is used instead.
 
@@ -244,8 +243,7 @@ fun of(text) {
 Three things make it hold up.
 
 **The version check.** An extension built against an older version of the
-library is refused rather than used, so the two halves cannot drift apart
-silently.
+library is refused, so the two halves cannot drift apart silently.
 
 **The load is lazy and happens once.** Building the table and opening the
 shared library both cost something, and a program that never asks for a
@@ -253,8 +251,8 @@ checksum pays neither.
 
 **Both halves are tested.** `crc32.use("red")` pins the Red half, so
 [`tests/libraries.red`](../tests/libraries.red) can check that the two
-agree on every byte value rather than testing whichever one happened to
-load.
+agree on every byte value. Without it the tests would cover whichever
+one happened to load.
 
 ## Shipping a library
 
@@ -282,4 +280,4 @@ export RED_PATH=$PWD/mylib
 
 Compiled libraries work too. `red compile mylib.red` produces `mylib.redc`
 and `import "mylib.redc"` loads it without running the compiler, which is
-worth doing for a large library that many programs import.
+a good idea for a large library that many programs import.

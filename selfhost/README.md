@@ -65,7 +65,7 @@ compared byte for byte.
 | `Proto`, `Constant`, `EnumDef` | `Chunk` and `ObjFunction` in [`src/chunk.h`](../src/chunk.h), [`src/object.h`](../src/object.h) |
 | `Writer`, `writeCompiled` | the writing half of [`src/serialize.cpp`](../src/serialize.cpp) |
 
-Three details are worth knowing about.
+Three details are worth a moment.
 
 **Numbers agree because both sides call the same conversion.** The scanner
 turns a literal into a double with `num()`, which is `strtod`, which is
@@ -75,8 +75,7 @@ what the C++ scanner uses. So the two compilers never disagree about what
 **Constant folding agrees because Red's operators are the ones being
 ported.** `a & b` in Red already truncates to 32 bits the way
 `toInt32()` does, and `%` is already `fmod`, so the folder in `redc.red`
-is the C++ folder with the casts removed rather than a reimplementation of
-them.
+is the C++ folder with the casts removed, not a reimplementation of it.
 
 **Writing a double is the one piece with no counterpart.** The C++ writer
 copies the eight bytes straight out of the value. Red cannot look at a
@@ -90,4 +89,4 @@ covers the corners.
 
 The virtual machine, the collector and the standard library. That is
 stage 4, and [docs/bootstrapping.md](../docs/bootstrapping.md#stage-4-the-virtual-machine)
-sets out the three honest ways to approach it.
+sets out the three ways to approach it.

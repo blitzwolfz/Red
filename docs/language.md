@@ -45,8 +45,8 @@ Whole numbers print without a decimal point. `1.0` prints as `1`.
 
 A number prints as the shortest text that reads back as the same value,
 so `num(str(x))` always gives `x` again. Above 2^53, where doubles stop
-counting by one, the exponent form takes over rather than printing digits
-the value does not carry.
+counting by one, the exponent form takes over. Printing the digits would
+be printing digits the value does not carry.
 
 ```red
 print(0.1 + 0.2);            // 0.30000000000000004
@@ -181,7 +181,7 @@ print(false and boom());     // false, boom() is never called
 `+` adds numbers or joins strings. It will not mix the two. Use `str()`
 or interpolation.
 
-`/` and `%` by zero raise an error rather than giving infinity.
+`/` and `%` by zero raise an error. They do not give infinity.
 
 Bitwise operators work on 32 bit signed integers. A number is truncated
 towards zero and wrapped into that range first. `>>` keeps the sign, and
@@ -252,7 +252,7 @@ when the loop starts, so adding entries during the loop does not disturb
 it. A string yields its characters. Anything else is an error.
 
 The loop variable is a fresh binding on each pass, so a closure made in
-the body captures that pass's value rather than sharing one.
+the body captures that pass's value; they do not share one.
 
 ```red
 let readers = [];
@@ -432,7 +432,7 @@ print(Colour.Green.value);    // 1
 print(Colour.Red.owner);      // <enum Colour>
 ```
 
-The property is called `owner` rather than `enum`, because `enum` is a
+The property is called `owner`, not `enum`, because `enum` is a
 keyword and could never be written after a dot.
 
 The enum itself answers questions about its members:
@@ -457,7 +457,7 @@ print(labels[Colour.Green.value]);
 ```
 
 An enum binding is always `const`. Asking for a member that does not
-exist is an error rather than `nil`, because it is almost always a typo.
+exist is an error, not `nil`, because it is almost always a typo.
 
 A member whose name clashes with one of the calls above wins, so an enum
 with a member called `values` hides `values()`.
@@ -493,7 +493,7 @@ let {corner: [left, top]} = box;
 ```
 
 `const` patterns bind constants. A `for ... in` loop takes a pattern too,
-which is what makes walking a map's entries read well:
+which makes walking a map's entries read well:
 
 ```red
 for (let [key, value] in ages.entries()) {
@@ -502,7 +502,8 @@ for (let [key, value] in ages.entries()) {
 ```
 
 Destructuring something that has no elements or no fields is an error
-naming the type, rather than a confusing failure further on.
+naming the type. Without it the failure would come later and make less
+sense.
 
 ## Sets
 
@@ -723,7 +724,7 @@ Clauses are tried in order, so put the specific ones first. A clause with
 no filter catches everything and must come last.
 
 An error that no clause matches carries on outwards unchanged, with its
-message, kind and original trace. That is what lets a function handle the
+message, kind and original trace, which lets a function handle the
 cases it knows about and leave the rest alone.
 
 ### finally
@@ -770,7 +771,7 @@ Everything a module declares at its top level is visible to whoever
 imports it, and nothing else is. A file is loaded once, however many
 times it is imported, and its state is shared by every importer. Two
 modules may import each other: the second one to start sees the first in
-its partly built state rather than looping forever.
+its half-built state. The other option is looping forever.
 
 Reading a name a module does not define raises an error. Module names
 cannot be assigned to from outside.

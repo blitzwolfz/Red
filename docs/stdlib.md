@@ -57,8 +57,8 @@ print(blob.bytes());         // [82, 101, 100]
 ## Text and bytes
 
 A string is a sequence of bytes and may hold anything, text or not. That
-leaves two ways of looking at one, and Red keeps them apart rather than
-guessing which you meant.
+leaves two ways of looking at one. Red keeps them apart and does not
+guess which you meant.
 
 | | Bytes | Characters |
 |---|---|---|
@@ -127,7 +127,7 @@ Doing those needs a locale, and Red has none.
 | `E` | 2.718281828459045 |
 
 An argument a function has no answer for raises an error with kind
-`"domain"` rather than quietly producing `nan`.
+`"domain"`. It does not quietly produce `nan`.
 
 ```red
 try {
@@ -199,7 +199,7 @@ rand_seed(1234);                      // the same run every time
 | `remove_dir(path)` | Removes it. It has to be empty. |
 
 `list_dir` sorts, so walking a directory does the same thing twice
-running. A path that is not there gives `nil` rather than an empty array,
+running. A path that is not there gives `nil`, not an empty array,
 which keeps a missing directory and an empty one apart.
 
 ```red
@@ -368,7 +368,7 @@ proportional to the length of the text. `(a+)+b` against five thousand
 characters finishes in a millisecond here.
 
 A pattern that cannot be compiled raises an error with kind `"regex"`
-saying what was wrong, rather than failing to match at run time.
+saying what was wrong. It does not wait and fail to match at run time.
 
 ## Running other programs
 
@@ -449,7 +449,7 @@ print(hypot(3, 4));      // 5
 
 A name with no `/` in it is looked for on the same search path as
 `import`; a name with one is used exactly as written. A missing file
-raises an error with kind `"ffi"`, which is what lets a library treat its
+raises an error with kind `"ffi"`, which lets a library treat its
 native half as optional.
 
 [`ffi/red_ffi.h`](../ffi/red_ffi.h) is the contract in C and

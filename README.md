@@ -30,11 +30,10 @@ task.join();
 ./setup.sh
 ```
 
-That checks what is installed, builds the interpreter into `build/red`,
-and runs the test suite. It needs CMake 3.16 or newer and a compiler with
-C++20; Python 3 runs the tests, and a JDK is optional and used only for
-the v1 interpreter. `./setup.sh --help` lists the rest, including
-`--install PREFIX`.
+That checks what you have installed, builds `build/red`, and runs the
+tests. You need CMake 3.16 or newer and a C++20 compiler. A JDK is
+optional and only builds the old v1 interpreter. `./setup.sh --help`
+lists the other flags, including `--install PREFIX`.
 
 Then:
 
@@ -159,9 +158,9 @@ print(task.join());
 | `red --gc-log script.red` | Reports each collection. |
 | `red --gc-stress script.red` | Collects before every allocation. |
 
-`--gc-stress` is the one that matters. It turns a rare collector bug into
-one that happens on the first run. It found two real bugs while this was
-being written.
+`--gc-stress` matters most. Collector bugs normally show up once in a
+thousand runs; this makes them show up on the first. It caught two while
+this was being written.
 
 `red debug` stops on lines, steps into, over and out of calls, sets
 breakpoints, and prints the locals in any frame by name.
@@ -178,8 +177,7 @@ wordcount.red:14  in count
 (red) bt
 ```
 
-It needs the source rather than a `.redc`, because a compiled file
-carries no names.
+It needs the source. A `.redc` has no names in it.
 
 `red fmt` formats source. It re-indents and re-spaces; it does not
 re-wrap, so where you put a line break, a line break stays. Every `.red`
@@ -191,8 +189,9 @@ red fmt -w src.red          # rewrite in place
 red fmt --check *.red       # exit 1 if anything would change
 ```
 
-It refuses rather than writes if the result would not read back as the
-same tokens, so a bug in it cannot mangle a file.
+Before writing anything it lexes its own output and compares the tokens
+to the input. If they differ it refuses and says so, so a bug in the
+formatter costs you a message, not your file.
 
 There is a language server too, [`tools/red-lsp.red`](tools/red-lsp.red),
 written in Red. It gives an editor the compiler's own diagnostics as you
@@ -231,22 +230,22 @@ written in it as comments, and `red test` runs a directory of them:
 
 `--gc-stress` collects before every allocation, `--compiled` runs each
 test from a `.redc`, and `--compiler` puts the Red compiler under the
-whole suite instead of the C++ one.
+whole suite in place of the C++ one.
 
 ## Libraries
 
-A library is a file of Red that other programs import. `import` looks
-next to the importing file, then on `RED_PATH`, then in the directories
-that ship with the interpreter, so a library installed once is reachable
-by bare name.
+A library is a Red file other programs import. `import` looks beside the
+importing file first, then on `RED_PATH`, then in the directories that
+ship with the interpreter. Install one and it is reachable everywhere by
+bare name.
 
 ```red
 import "cli.red" as cli;
 ```
 
-When part of a library needs to be fast, or needs something the standard
-library does not cover, that part can be written in C or C++ and loaded
-as an extension.
+When one part of a library needs to be fast, or needs something the
+standard library has not got, write that part in C or C++ and load it as
+an extension.
 
 ```cpp
 #include "red_ffi.hpp"
@@ -316,12 +315,11 @@ the same work and their output is compared. Reproduce with
 
 A ratio below 1.00 means Red was faster.
 
-Red is in the same range as CPython on calls, loops and allocation, and
-faster on method dispatch. String work is the weak spot, at three and a
-half times slower, though it used to be five and a half: only strings of
-one or two characters are shared now, so building a long one no longer
-pays for a hash table insert it will never use again.
-[docs/design.md](docs/design.md#value-layout) has the rest.
+Calls, loops and allocation land near CPython. Method dispatch is
+faster. Strings are the weak spot at 3.9x, down from 5.6x: only one and
+two character strings are interned now, so building a long one no longer
+pays for a hash table insert nothing will ever look up.
+[docs/design.md](docs/design.md#value-layout) explains the rest.
 
 ## Architecture
 
@@ -348,14 +346,14 @@ pays for a hash table insert it will never use again.
                                            └──────┘  └──────┘  └──────┘
 ```
 
-There is no syntax tree. The compiler reads one token at a time and emits
-bytecode directly.
+There is no syntax tree. The compiler reads a token, emits bytecode, and
+forgets.
 
-One `Runtime` per process holds the heap. One `VM` per task holds a value
-stack and call frames. A task holds the runtime lock while it runs
-bytecode, and releases it before anything that waits. The collector runs
-only while that lock is held, so any task that is not holding it has a
-stack that is not moving and can be scanned safely.
+One `Runtime` per process owns the heap. Each task gets its own `VM` with
+its own value stack and call frames. A task holds the runtime lock while
+it executes bytecode and drops it before anything that blocks. Collection
+happens only under that lock, which is what makes the other tasks' stacks
+safe to scan: none of them are moving.
 
 | Where | What |
 |---|---|

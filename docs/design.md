@@ -38,7 +38,7 @@ back. Two things had to be designed around this:
   forward into the body and the body jumps back to the increment.
 - `for (let x in items)` and `for (let i = 0; ...)` cannot be told apart
   until after the name, because `in` only appears once the name has been
-  read. The compiler reads the name first and then decides, rather than
+  read. The compiler reads the name first and then decides. It does not
   looking ahead.
 
 The gain is that compiling is fast and there is no tree to allocate, walk
@@ -66,7 +66,7 @@ those patterns, so every value can be eight bytes instead of sixteen.
 
 Red uses the tagged struct, and for a while this file said NaN boxing was
 a reasonable next change. It was tried in 0.4.0 and taken back out, so
-here is what happened instead of the guess.
+here is what happened, in place of the guess.
 
 The change itself was easy, which was the point of routing everything
 through `isNumber`, `asNumber` and `numberValue`: value.h was rewritten,
@@ -84,7 +84,7 @@ that drift fell on both:
 
 Calls and arithmetic got 5 to 12% worse. Method dispatch got 5% better.
 
-The reason is the one that does not show up in the design sketch. With a
+The reason never shows up in the design sketch. With a
 tagged struct the double sits at a fixed offset and loads straight into a
 floating point register. NaN boxed, it arrives in an integer register and
 every arithmetic instruction has to move it across — `fmov` on ARM64,
@@ -98,7 +98,7 @@ so there was not much traffic to save, and the register moves cost more
 than the cache did.
 
 So: sixteen bytes, and the saving is real but smaller than the price. It
-would be worth revisiting on a machine with a worse cache, or after the
+would be worth another look on a machine with a worse cache, or after the
 interpreter stops being dominated by dispatch, or alongside a change that
 keeps unboxed doubles in the stack. Not before.
 
@@ -120,7 +120,7 @@ because it costs one pointer per object and needs no allocation of its
 own.
 
 Objects are created with `new` and released with `delete`, one type at a
-time, rather than from a raw byte arena with placement `new`. Several
+time, not from a raw byte arena with placement `new`. Several
 object types hold `std::vector`, `std::string` or `std::deque` members,
 and those need real constructors and destructors. Running them by hand
 over an arena would have added a second lifetime system next to the
@@ -248,7 +248,7 @@ the lock, which lets other tasks and the collector run. A channel with
 capacity zero is unbuffered: the sender waits until a receiver takes the
 value.
 
-Because channel state is guarded by the runtime lock rather than a private
+Because channel state is guarded by the runtime lock and not a private
 mutex, the collector can read a channel's buffer directly while marking.
 Values parked in a channel are live, and this is how they stay live.
 
@@ -285,7 +285,7 @@ An error that no clause matches carries on outwards unchanged. Without
 that, a `try` that named a few kinds would quietly swallow everything
 else, which is the failure mode that makes exception handling untrusted.
 
-A nested run loop, which is what `import` and callbacks such as
+A nested run loop, which `import` and callbacks such as
 `array.map` use, records the frame it started at. Unwinding never crosses
 that line. Without it, an error inside an imported module could jump into
 a `try` block in the importing file and leave the stacks inconsistent.
@@ -335,8 +335,8 @@ file is smaller than the source for ordinary code.
 
 Paying the compiler once also makes it worth doing work there. The
 compiler folds arithmetic, bitwise operations and string joins on
-literals into single constants. It is a peephole rather than a pass over
-a tree, which is what a single pass compiler can do cheaply. Anything
+literals into single constants. A peephole, not a pass over a tree:
+cheap is all a single pass compiler can afford. Anything
 deeper, such as removing dead code or reusing common subexpressions,
 needs an intermediate form to work on, and that is a separate change.
 
@@ -352,7 +352,7 @@ would run past the end.
 
 So the compiler records an upper bound on each function's stack use, and
 a call checks that bound against the room left before it pushes a frame.
-Going over reports an error that a program can catch, rather than writing
+Going over reports an error a program can catch. It does not write
 past the end of the buffer. Whichever limit is reached first is the one
 reported.
 
@@ -365,12 +365,12 @@ is a constant load.
 
 Members are unique objects, so comparing them is a pointer compare and
 they can be map keys. That is why the rule for map keys is written as one
-function, `isHashableKey`, rather than repeated at each site: a key must
+function, `isHashableKey`, and not repeated at each site: a key must
 either compare by value or be an object that never changes.
 
-Members print as `Colour.Red` rather than as a number. A compiler written
+Members print as `Colour.Red`, not as a number. A compiler written
 in Red will have a token kind and an opcode for every instruction, and
-reading `38` in a trace instead of `TokenType.Fun` is the difference
+reading `38` in a trace where `TokenType.Fun` belongs is the difference
 between a debuggable program and a frustrating one.
 
 Enums do not carry data. A tagged union would be a bigger feature, and it
@@ -415,7 +415,7 @@ v1 is the old implementation, not a subsystem of the new one.
   so pasted multi-line input works, and braces inside strings do not
   confuse it.
 
-The disassembler and the trace share one function. That is on purpose: the
+The disassembler and the trace share one function, by design: the
 trace can never drift from the disassembler, because there is only one
 piece of code that knows how to print an instruction.
 
@@ -435,6 +435,6 @@ These are real and they are not hidden:
 - Each task's value stack is one megabyte, allocated up front. That is
   the price of never moving it, because call frames and open upvalues
   hold raw pointers into it.
-- The instruction pointer lives in the call frame rather than in a local
+- The instruction pointer lives in the call frame, not in a local
   variable in the dispatch loop. Caching it would be the first thing to
   try for speed.
