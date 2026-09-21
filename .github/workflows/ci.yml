@@ -1,0 +1,155 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The JDK is optional. It is here so the legacy bridge is covered
+      # too, rather than skipped.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Version
+        run: ./build/red version
+
+      - name: Tests
+        run: ./build/red test tests
+
+      # Collect before every allocation. This is what catches a missing
+      # root, which otherwise shows up rarely and at random.
+      - name: Tests under GC stress
+        run: ./build/red test tests --gc-stress
+
+      # Compile every test ahead of time and run the .redc instead, which
+      # checks that the compiled format round trips the whole language.
+      - name: Tests compiled ahead of time
+        run: ./build/red test tests --compiled
+
+      # The whole suite again, compiled by the Red compiler rather than
+      # the C++ one.
+      - name: Tests compiled by the self-hosted compiler
+        run: ./build/red test tests --compiler selfhost/redc.red
+
+      # Compiles the Red compiler with itself three times and checks that
+      # the last two results are identical, then compiles the whole suite
+      # with it. A change to src/compiler.cpp that is not mirrored in
+      # selfhost/redc.red shows up here as a byte difference.
+      - name: Bootstrap the self-hosted compiler
+        run: ./selfhost/bootstrap.sh
+
+      - name: Examples
+        run: |
+          ./build/red examples/tour.red
+          ./build/red examples/echo_server.red
+          ./build/red examples/word_count.red
+          ./build/red examples/legacy_bridge.red
+          ./build/red examples/mini_compiler.red
+          ./build/red examples/library_tour.red --loud ada grace
+          ./build/red examples/logstat/logstat.red examples/logstat/sample.log
+          ./build/red compile examples/tour.red -o /tmp/tour.redc
+          ./build/red /tmp/tour.redc
+
+      # The program docs/guide.md builds, and its own tests. It is the
+      # check that the guide still describes something that works.
+      - name: The guide's program
+        run: |
+          ./build/red test examples/logstat/tests
+          ./build/red examples/logstat/logstat.red --json examples/logstat/sample.log
+          ./build/red compile examples/logstat/logstat.red
+          ./build/red examples/logstat/logstat.redc --quiet examples/logstat/sample.log
+
+      # A library found on the search path, and the same library compiled
+      # ahead of time and imported as a .redc.
+      - name: Libraries
+        run: |
+          ./build/red compile lib/crc32.red -o build/crc32.redc
+          printf 'import "crc32.redc" as c;\nprint(c.of("hello"));\n' > /tmp/lib.red
+          ./build/red /tmp/lib.red
+          printf 'import "json.red" as j;\nprint(j.stringify(j.parse("[1,2]")));\n' > /tmp/j.red
+          ./build/red /tmp/j.red
+
+      # Every .red file in the repository is already formatted, so this
+      # says nothing unless someone changes one and does not run fmt.
+      - name: Formatting
+        run: ./build/red fmt --check $(find tests examples lib selfhost bench -name '*.red' | sort)
+
+      # Drives the language server through a session and checks it
+      # answered: capabilities, symbols, and a diagnostic for a file
+      # that does not compile.
+      - name: Language server
+        run: python3 tools/lsp_smoke.py ./build/red tools/red-lsp.red
+
+      - name: Disassembler
+        run: ./build/red disasm examples/tiny.red
+
+      # Drives the debugger over a script and checks that it stopped
+      # where it was told to and could name a local.
+      - name: Debugger
+        run: |
+          printf 'fun add(a, b) { return a + b; }\nlet total = 0;\nfor (let i in [1, 2]) { total = add(total, i); }\nprint(total);\n' > /tmp/dbg.red
+          printf 'b 3\nc\nv\np total\ns\nbt\nc\nc\nq\n' | ./build/red debug /tmp/dbg.red | tee /tmp/dbg.out
+          grep -q 'in add' /tmp/dbg.out
+          grep -q 'total' /tmp/dbg.out
+
+      - name: Legacy interpreter
+        run: ./build/red legacy legacy/main.red
+
+      - name: Benchmarks
+        run: ./build/red bench
+
+  sanitizers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Configure with address and undefined behaviour sanitizers
+        run: cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DRED_SANITIZE=ON
+
+      - name: Build
+        run: cmake --build build-asan -j
+
+      - name: Tests under sanitizers and GC stress
+        run: |
+          ./build-asan/red test tests --gc-stress
+          ./build-asan/red test tests --compiled
+
+      - name: Configure with the thread sanitizer
+        run: |
+          cmake -B build-tsan -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS=-fsanitize=thread \
+            -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread
+
+      - name: Build
+        run: cmake --build build-tsan --target red -j
+
+      - name: Concurrency tests under the thread sanitizer
+        run: ./build-tsan/red test tests --filter concurrency

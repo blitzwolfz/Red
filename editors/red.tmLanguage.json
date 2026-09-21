@@ -1,0 +1,151 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Red",
+  "scopeName": "source.red",
+  "fileTypes": [
+    "red"
+  ],
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#declaration"
+    },
+    {
+      "include": "#keyword"
+    },
+    {
+      "include": "#builtin"
+    },
+    {
+      "include": "#operator"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.red",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.red",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "string": {
+      "name": "string.quoted.double.red",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.red",
+          "match": "\\\\(?:[nrt0\\\\\"$]|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]{1,6}\\})"
+        },
+        {
+          "name": "meta.embedded.red",
+          "begin": "\\$\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.red"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.red"
+            }
+          },
+          "patterns": [
+            {
+              "include": "$self"
+            }
+          ]
+        }
+      ]
+    },
+    "number": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.red",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.red",
+          "match": "\\b\\d+(\\.\\d+)?([eE][-+]?\\d+)?\\b"
+        }
+      ]
+    },
+    "declaration": {
+      "patterns": [
+        {
+          "match": "\\b(fun)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.red"
+            },
+            "2": {
+              "name": "entity.name.function.red"
+            }
+          }
+        },
+        {
+          "match": "\\b(class|enum)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.class.red"
+            },
+            "2": {
+              "name": "entity.name.type.red"
+            }
+          }
+        }
+      ]
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.red",
+          "match": "\\b(if|else|switch|case|default|for|while|break|continue|return|throw|try|catch|finally|spawn|import|in|as)\\b"
+        },
+        {
+          "name": "keyword.operator.word.red",
+          "match": "\\b(and|or|is)\\b"
+        },
+        {
+          "name": "support.type.red",
+          "match": "\\b(Any|Array|Bool|Error|Fun|Int|Map|Nil|Num|Set|String)\\b"
+        },
+        {
+          "name": "storage.type.red",
+          "match": "\\b(let|const|fun|class|enum)\\b"
+        },
+        {
+          "name": "constant.language.red",
+          "match": "\\b(true|false|nil|PI|E)\\b"
+        },
+        {
+          "name": "variable.language.red",
+          "match": "\\b(this|super)\\b"
+        }
+      ]
+    },
+    "builtin": {
+      "name": "support.function.red",
+      "match": "\\b(print|write|eprint|ewrite|type|str|repr|num|int|len|chr|char|set|range|input|assert|error|exit|abs|floor|ceil|round|sign|sqrt|pow|exp|log|min|max|sin|cos|tan|asin|acos|atan|hypot|rand|rand_seed|read_file|write_file|append_file|open|remove_file|exists|is_file|is_dir|file_size|modified|rename|list_dir|mkdir|remove_dir|args|env|set_env|cwd|source_path|source_dir|library_paths|platform|cpu_count|time|clock|date|format_time|collect|gc_info|chan|sleep|tcp_listen|tcp_connect|ffi_open|regex|run|shell|which|legacy|legacy_output|legacy_available)\\b(?=\\s*\\()"
+    },
+    "operator": {
+      "name": "keyword.operator.red",
+      "match": "(\\+=|-=|\\*=|/=|%=|==|!=|<=|>=|<<|>>|->|\\.\\.\\.|[-+*/%<>=!&|^~])"
+    }
+  }
+}
