@@ -1,6 +1,6 @@
-// Tests for the parse module, in the shape tests/run.py expects.
+// Tests for the parse module, in the shape `red test` expects.
 //
-//   python3 tests/run.py --red build/red --tests examples/logstat/tests
+//   red test examples/logstat/tests
 //
 // The module is tested and the program is not, because the module is
 // where the decisions live. logstat.red only moves values between it and

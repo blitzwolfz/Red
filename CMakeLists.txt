@@ -84,11 +84,15 @@ set_target_properties(example_ext PROPERTIES C_STANDARD 11)
 red_add_extension(crc32_ext ffi/crc32_ext.cpp)
 
 enable_testing()
-find_package(Python3 COMPONENTS Interpreter)
-if(Python3_Interpreter_FOUND)
-  add_test(NAME conformance
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run.py
-            --red $<TARGET_FILE:red>
-            --tests ${CMAKE_CURRENT_SOURCE_DIR}/tests
-  )
-endif()
+
+# The runner is the interpreter itself, so `ctest` needs nothing beyond
+# what was just built.
+add_test(NAME conformance
+  COMMAND $<TARGET_FILE:red> test ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+add_test(NAME conformance-gc-stress
+  COMMAND $<TARGET_FILE:red> test ${CMAKE_CURRENT_SOURCE_DIR}/tests --gc-stress
+)
+add_test(NAME conformance-compiled
+  COMMAND $<TARGET_FILE:red> test ${CMAKE_CURRENT_SOURCE_DIR}/tests --compiled
+)

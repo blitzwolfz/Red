@@ -19,7 +19,7 @@ red logstat.red --help
 | [`tests/parse.red`](tests/parse.red) | Tests for the module. |
 
 ```bash
-python3 ../../tests/run.py --red ../../build/red --tests tests
+red test tests
 ```
 
 The split between the two files is the point. `parse.red` knows about log

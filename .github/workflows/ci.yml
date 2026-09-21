@@ -37,17 +37,22 @@ jobs:
         run: ./build/red version
 
       - name: Tests
-        run: python3 tests/run.py --red build/red --tests tests
+        run: ./build/red test tests
 
       # Collect before every allocation. This is what catches a missing
       # root, which otherwise shows up rarely and at random.
       - name: Tests under GC stress
-        run: python3 tests/run.py --red build/red --tests tests --gc-stress
+        run: ./build/red test tests --gc-stress
 
       # Compile every test ahead of time and run the .redc instead, which
       # checks that the compiled format round trips the whole language.
       - name: Tests compiled ahead of time
-        run: python3 tests/run.py --red build/red --tests tests --compiled
+        run: ./build/red test tests --compiled
+
+      # The whole suite again, compiled by the Red compiler rather than
+      # the C++ one.
+      - name: Tests compiled by the self-hosted compiler
+        run: ./build/red test tests --compiler selfhost/redc.red
 
       # Compiles the Red compiler with itself three times and checks that
       # the last two results are identical, then compiles the whole suite
@@ -72,7 +77,7 @@ jobs:
       # check that the guide still describes something that works.
       - name: The guide's program
         run: |
-          python3 tests/run.py --red build/red --tests examples/logstat/tests
+          ./build/red test examples/logstat/tests
           ./build/red examples/logstat/logstat.red --json examples/logstat/sample.log
           ./build/red compile examples/logstat/logstat.red
           ./build/red examples/logstat/logstat.redc --quiet examples/logstat/sample.log
@@ -112,8 +117,8 @@ jobs:
 
       - name: Tests under sanitizers and GC stress
         run: |
-          python3 tests/run.py --red build-asan/red --tests tests --gc-stress
-          python3 tests/run.py --red build-asan/red --tests tests --compiled
+          ./build-asan/red test tests --gc-stress
+          ./build-asan/red test tests --compiled
 
       - name: Configure with the thread sanitizer
         run: |
@@ -125,6 +130,4 @@ jobs:
         run: cmake --build build-tsan --target red -j
 
       - name: Concurrency tests under the thread sanitizer
-        run: |
-          python3 tests/run.py --red build-tsan/red --tests tests \
-            --filter concurrency
+        run: ./build-tsan/red test tests --filter concurrency

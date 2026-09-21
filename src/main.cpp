@@ -1,4 +1,9 @@
 // Command line entry point.
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -38,6 +43,7 @@ void printUsage() {
       "  red run <program> [args]     same, stated explicitly\n"
       "  red compile <in.red> [-o f]  compile ahead of time to a .redc file\n"
       "  red repl                     start the interactive prompt\n"
+      "  red test [directory]         run the tests in a directory\n"
       "  red disasm <program>         print the compiled bytecode\n"
       "  red legacy <script.red>      run a script on the v1 Java interpreter\n"
       "  red bench [directory]        run the benchmark suite\n"
@@ -46,7 +52,14 @@ void printUsage() {
       "Options:\n"
       "  --trace       print every instruction and the stack as it runs\n"
       "  --gc-log      report each collection\n"
-      "  --gc-stress   collect before every allocation, for finding bugs\n",
+      "  --gc-stress   collect before every allocation, for finding bugs\n"
+      "\n"
+      "Options for `red test`:\n"
+      "  --gc-stress        collect before every allocation in each test\n"
+      "  --compiled         compile each test first and run the .redc\n"
+      "  --compiler <prog>  compile with this Red program, not the built-in\n"
+      "                     compiler. selfhost/redc.red is the one to pass\n"
+      "  --filter <text>    only tests whose name contains this\n",
       kVersion);
 }
 
@@ -203,6 +216,308 @@ int compileToFile(Runtime& runtime, const std::string& path,
   std::printf("%s -> %s (%zu bytes)\n", path.c_str(), outPath.c_str(),
               bytes.size());
   return 0;
+}
+
+
+// ---------------------------------------------------------------------
+// The test runner.
+//
+// A test is a Red program with its expected output written in it as
+// comments, so that it reads on its own:
+//
+//   print(1 + 1);                  // expect: 2
+//   // expect runtime error: Division by zero.
+//   // expect compile error: Expect ';'
+//
+// Lines marked `expect` must appear on standard output in that order. An
+// expected error is matched as a substring of standard error, and brings
+// the exit code with it: 70 for a runtime error, 65 for one at compile
+// time.
+
+struct Expectations {
+  std::vector<std::string> output;
+  std::vector<std::string> runtimeErrors;
+  std::vector<std::string> compileErrors;
+};
+
+// Text after a `// expect...:` marker, or nothing. At most one space
+// after the colon belongs to the marker; the rest is expected output, so
+// a test can expect a line that begins with a space.
+bool expectationOn(const std::string& line, const char* keyword,
+                   std::string* out) {
+  size_t keywordLength = std::strlen(keyword);
+  size_t at = 0;
+  while ((at = line.find("//", at)) != std::string::npos) {
+    size_t cursor = at + 2;
+    while (cursor < line.size() && (line[cursor] == ' ' || line[cursor] == '\t')) {
+      cursor++;
+    }
+    if (line.compare(cursor, keywordLength, keyword) == 0) {
+      cursor += keywordLength;
+      if (cursor < line.size() && line[cursor] == ' ') cursor++;
+      *out = line.substr(cursor);
+      return true;
+    }
+    at += 2;
+  }
+  return false;
+}
+
+Expectations readExpectations(const std::string& source) {
+  Expectations wanted;
+  size_t start = 0;
+  while (start <= source.size()) {
+    size_t end = source.find('\n', start);
+    if (end == std::string::npos) end = source.size();
+    std::string line = source.substr(start, end - start);
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+
+    std::string text;
+    if (expectationOn(line, "expect runtime error:", &text)) {
+      wanted.runtimeErrors.push_back(text);
+    } else if (expectationOn(line, "expect compile error:", &text)) {
+      wanted.compileErrors.push_back(text);
+    } else if (expectationOn(line, "expect:", &text)) {
+      wanted.output.push_back(text);
+    }
+    start = end + 1;
+  }
+  return wanted;
+}
+
+std::string quoteForShell(const std::string& text) {
+  std::string out = "'";
+  for (char c : text) {
+    if (c == '\'') {
+      out += "'\\''";
+    } else {
+      out += c;
+    }
+  }
+  out += "'";
+  return out;
+}
+
+// Runs one command with its streams captured. Returns the exit status.
+int runCaptured(const std::string& command, const std::string& directory,
+                const std::string& outPath, const std::string& errPath,
+                std::string* out, std::string* err) {
+  std::string full = "cd " + quoteForShell(directory) + " && " + command +
+                     " > " + quoteForShell(outPath) + " 2> " +
+                     quoteForShell(errPath);
+  int status = std::system(full.c_str());
+  readFile(outPath, out);
+  readFile(errPath, err);
+  if (status == -1) return -1;
+  return (status >> 8) & 0xff;
+}
+
+std::vector<std::string> splitLines(const std::string& text) {
+  std::vector<std::string> lines;
+  size_t start = 0;
+  while (start < text.size()) {
+    size_t end = text.find('\n', start);
+    if (end == std::string::npos) end = text.size();
+    lines.push_back(text.substr(start, end - start));
+    start = end + 1;
+  }
+  return lines;
+}
+
+struct TestOptions {
+  bool gcStress = false;
+  bool compiled = false;
+  // A Red program to compile with instead of the built-in compiler,
+  // which is how the self-hosted one is put under the whole suite.
+  std::string compiler;
+  std::string filter;
+};
+
+// Collects every .red file under `directory`, sorted. Files in a folder
+// named `modules` are imported by other tests rather than run on their
+// own, so they are left out.
+void collectTests(const std::string& directory, std::vector<std::string>* out) {
+  DIR* handle = ::opendir(directory.c_str());
+  if (handle == nullptr) return;
+
+  std::vector<std::string> names;
+  for (;;) {
+    struct dirent* entry = ::readdir(handle);
+    if (entry == nullptr) break;
+    std::string name = entry->d_name;
+    if (name == "." || name == "..") continue;
+    names.push_back(name);
+  }
+  ::closedir(handle);
+  std::sort(names.begin(), names.end());
+
+  for (const std::string& name : names) {
+    std::string path = joinPath(directory, name);
+    struct stat info;
+    if (::stat(path.c_str(), &info) != 0) continue;
+    if (S_ISDIR(info.st_mode)) {
+      if (name == "modules") continue;
+      collectTests(path, out);
+    } else if (name.size() > 4 &&
+               name.compare(name.size() - 4, 4, ".red") == 0) {
+      out->push_back(path);
+    }
+  }
+}
+
+int runTests(const std::string& directory, const TestOptions& options) {
+  std::vector<std::string> paths;
+  collectTests(directory, &paths);
+  if (paths.empty()) {
+    std::fprintf(stderr, "No .red files under '%s'.\n", directory.c_str());
+    return kExitUsage;
+  }
+
+  // Colour only when someone is watching. Piped into a file or a log it
+  // would just be noise.
+  bool colour = ::isatty(1) != 0;
+  const char* green = colour ? "\033[32m" : "";
+  const char* red = colour ? "\033[31m" : "";
+  const char* dim = colour ? "\033[2m" : "";
+  const char* off = colour ? "\033[0m" : "";
+
+  char temporary[] = "/tmp/red-test-XXXXXX";
+  if (::mkdtemp(temporary) == nullptr) {
+    std::fprintf(stderr, "Cannot make a temporary directory.\n");
+    return kExitUsage;
+  }
+  std::string outPath = std::string(temporary) + "/out";
+  std::string errPath = std::string(temporary) + "/err";
+
+  std::string self = quoteForShell(absolutePath(executablePath()));
+  std::string base = absolutePath(directory);
+  int passed = 0;
+  int failed = 0;
+
+  for (const std::string& path : paths) {
+    std::string name = absolutePath(path);
+    if (name.compare(0, base.size(), base) == 0 && name.size() > base.size()) {
+      name = name.substr(base.size() + 1);
+    }
+    if (!options.filter.empty() &&
+        name.find(options.filter) == std::string::npos) {
+      continue;
+    }
+
+    std::string source;
+    if (!readFile(absolutePath(path), &source)) continue;
+    Expectations wanted = readExpectations(source);
+
+    std::string absolute = absolutePath(path);
+    std::string directoryOfTest = directoryOf(absolute);
+    std::vector<std::string> problems;
+    std::string toRun = absolute;
+    std::string compiledPath;
+
+    // A test that is meant not to compile has nothing to run compiled.
+    bool skipCompile = wanted.compileErrors.empty() == false;
+    if (options.compiled && !skipCompile) {
+      compiledPath = absolute.substr(0, absolute.size() - 4) + ".redc";
+      std::string command = self;
+      if (!options.compiler.empty()) {
+        command += " " + quoteForShell(absolutePath(options.compiler));
+      }
+      command += " compile " + quoteForShell(absolute) + " -o " +
+                 quoteForShell(compiledPath);
+      std::string ignored, reason;
+      int status = runCaptured(command, directoryOfTest, outPath, errPath,
+                               &ignored, &reason);
+      if (status != 0) {
+        problems.push_back("could not compile ahead of time: " + reason);
+      } else {
+        toRun = compiledPath;
+      }
+    }
+
+    std::string out;
+    std::string err;
+    int status = 0;
+    if (problems.empty()) {
+      std::string command = self;
+      if (options.gcStress) command += " --gc-stress";
+      command += " " + quoteForShell(toRun);
+      status = runCaptured(command, directoryOfTest, outPath, errPath, &out,
+                           &err);
+    }
+    if (!compiledPath.empty()) ::remove(compiledPath.c_str());
+
+    if (problems.empty()) {
+      std::vector<std::string> actual = splitLines(out);
+      for (size_t i = 0; i < wanted.output.size(); i++) {
+        if (i >= actual.size()) {
+          problems.push_back("line " + std::to_string(i + 1) + ": expected '" +
+                             wanted.output[i] + "', got nothing");
+        } else if (actual[i] != wanted.output[i]) {
+          problems.push_back("line " + std::to_string(i + 1) + ": expected '" +
+                             wanted.output[i] + "', got '" + actual[i] + "'");
+        }
+      }
+      for (size_t i = wanted.output.size(); i < actual.size(); i++) {
+        problems.push_back("unexpected output '" + actual[i] + "'");
+      }
+
+      for (const std::string& want : wanted.runtimeErrors) {
+        if (err.find(want) == std::string::npos) {
+          problems.push_back("expected a runtime error containing '" + want +
+                             "'");
+        }
+      }
+      for (const std::string& want : wanted.compileErrors) {
+        if (err.find(want) == std::string::npos) {
+          problems.push_back("expected a compile error containing '" + want +
+                             "'");
+        }
+      }
+
+      int expectedStatus = 0;
+      if (!wanted.runtimeErrors.empty()) {
+        expectedStatus = kExitRuntimeError;
+      } else if (!wanted.compileErrors.empty()) {
+        expectedStatus = kExitCompileError;
+      }
+      if (status != expectedStatus) {
+        std::string note = "expected exit code " +
+                           std::to_string(expectedStatus) + ", got " +
+                           std::to_string(status);
+        if (expectedStatus == 0 && !err.empty()) note += "\n     " + err;
+        problems.push_back(note);
+      }
+    }
+
+    if (problems.empty()) {
+      passed++;
+      std::printf("%sok%s   %s\n", green, off, name.c_str());
+    } else {
+      failed++;
+      std::printf("%sFAIL%s %s\n", red, off, name.c_str());
+      for (const std::string& problem : problems) {
+        std::printf("     %s%s%s\n", dim, problem.c_str(), off);
+      }
+    }
+  }
+
+  ::remove(outPath.c_str());
+  ::remove(errPath.c_str());
+  ::rmdir(temporary);
+
+  std::string modes;
+  if (options.gcStress) modes = "gc stress";
+  if (!options.compiler.empty()) {
+    modes += modes.empty() ? "" : ", ";
+    modes += "compiled by " + options.compiler;
+  } else if (options.compiled) {
+    modes += modes.empty() ? "" : ", ";
+    modes += "compiled ahead of time";
+  }
+  std::printf("\n%d/%d tests passed%s%s%s\n", passed, passed + failed,
+              modes.empty() ? "" : " (", modes.c_str(),
+              modes.empty() ? "" : ")");
+  return failed == 0 ? 0 : 1;
 }
 
 // Returns true when the text so far cannot be a complete program, so the
@@ -366,6 +681,52 @@ int runBench(Runtime& runtime, const std::string& directory) {
 int main(int argc, const char* argv[]) {
   Runtime runtime;
   setExecutablePath(argc > 0 ? argv[0] : "red");
+
+  // `red test` takes flags of its own, so everything after it is handed
+  // over untouched rather than read as options for the interpreter. Only
+  // the first thing that is not a global flag can be the command: a
+  // program is free to have an argument called "test".
+  int first = argc;
+  for (int i = 1; i < argc; i++) {
+    std::string arg = argv[i];
+    if (arg == "--trace" || arg == "--gc-log" || arg == "--gc-stress") continue;
+    first = i;
+    break;
+  }
+  if (first < argc && std::string(argv[first]) == "test") {
+    int i = first;
+    TestOptions options;
+    std::string directory = "tests";
+    bool sawDirectory = false;
+    for (int j = i + 1; j < argc; j++) {
+      std::string arg = argv[j];
+      if (arg == "--gc-stress") {
+        options.gcStress = true;
+      } else if (arg == "--compiled") {
+        options.compiled = true;
+      } else if (arg == "--compiler" && j + 1 < argc) {
+        options.compiler = argv[++j];
+        options.compiled = true;
+      } else if (arg == "--filter" && j + 1 < argc) {
+        options.filter = argv[++j];
+      } else if (arg.rfind("--", 0) == 0) {
+        std::fprintf(stderr, "Unknown option '%s' for `red test`.\n",
+                     arg.c_str());
+        return kExitUsage;
+      } else if (!sawDirectory) {
+        directory = arg;
+        sawDirectory = true;
+      } else {
+        std::fprintf(stderr, "`red test` takes one directory.\n");
+        return kExitUsage;
+      }
+    }
+    {
+      std::lock_guard<std::mutex> guard(runtime.lock);
+      installBuiltins(runtime);
+    }
+    return runTests(directory, options);
+  }
 
   std::vector<std::string> positional;
   for (int i = 1; i < argc; i++) {

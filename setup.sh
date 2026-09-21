@@ -8,9 +8,9 @@
 #   ./setup.sh --install PREFIX   also install into PREFIX
 #   ./setup.sh --help
 #
-# Needs CMake 3.16 or newer and a compiler with C++20. Python 3 is used to
-# run the test suite. A JDK is optional: without one the v1 interpreter is
-# skipped and everything else still works.
+# Needs CMake 3.16 or newer and a compiler with C++20. Python 3 is optional
+# and only used by the benchmark comparison. A JDK is optional too: without
+# one the v1 interpreter is skipped and everything else still works.
 
 set -euo pipefail
 
@@ -73,8 +73,7 @@ fi
 if have python3; then
   echo "  python3    $(python3 --version)"
 else
-  echo "  python3    not found, so the test suite will be skipped"
-  RUN_TESTS=0
+  echo "  python3    not found. Only the benchmark comparison needs it"
 fi
 
 if have javac; then
@@ -107,7 +106,7 @@ RED=$BUILD_DIR/red
 # ---------------------------------------------------------------------
 if [ "$RUN_TESTS" -eq 1 ]; then
   say "tests"
-  python3 tests/run.py --red "$RED" --tests tests
+  "$RED" test tests
 fi
 
 # ---------------------------------------------------------------------
