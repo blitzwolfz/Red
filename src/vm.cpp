@@ -6,6 +6,7 @@
 
 #include "compiler.h"
 #include "debug.h"
+#include "debugger.h"
 #include "serialize.h"
 #include "stdlib/builtins.h"
 #include "util.h"
@@ -775,7 +776,18 @@ bool VM::importModule(ObjString* path) {
 // ---------------------------------------------------------------------
 // the interpreter loop
 
+// Picks which of the two loops to run. Everything below is shared; the
+// template parameter decides whether the debugger and the tracer exist
+// at all in the instantiation.
 InterpretResult VM::run(int baseFrame) {
+  if (runtime_.debugger != nullptr || runtime_.traceExecution) {
+    return runLoop<true>(baseFrame);
+  }
+  return runLoop<false>(baseFrame);
+}
+
+template <bool Instrumented>
+InterpretResult VM::runLoop(int baseFrame) {
   int previousBase = baseFrame_;
   baseFrame_ = baseFrame;
   CallFrame* frame = &frames_[frameCount_ - 1];
@@ -820,15 +832,20 @@ InterpretResult VM::run(int baseFrame) {
   }
 
   for (;;) {
-    if (runtime_.traceExecution) {
-      std::printf("          ");
-      for (Value* slot = stack_; slot < stackTop_; slot++) {
-        std::printf("[ %s ]", valueToDisplay(*slot).c_str());
+    if constexpr (Instrumented) {
+      if (runtime_.debugger != nullptr) {
+        runtime_.debugger->beforeInstruction(*this, frame);
       }
-      std::printf("\n");
-      disassembleInstruction(
-          frame->closure->function->chunk,
-          (size_t)(frame->ip - frame->closure->function->chunk.code.data()));
+      if (runtime_.traceExecution) {
+        std::printf("          ");
+        for (Value* slot = stack_; slot < stackTop_; slot++) {
+          std::printf("[ %s ]", valueToDisplay(*slot).c_str());
+        }
+        std::printf("\n");
+        disassembleInstruction(
+            frame->closure->function->chunk,
+            (size_t)(frame->ip - frame->closure->function->chunk.code.data()));
+      }
     }
 
     uint8_t instruction = READ_BYTE();

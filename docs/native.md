@@ -204,11 +204,24 @@ more on the page than a prediction quietly removed.
 **Computed-goto dispatch.** Replaces the switch with a jump table
 threaded through each instruction, which removes one indirect branch and
 helps the branch predictor keep separate history per opcode. Twenty lines
-behind a compiler check. Typically 10 to 20% on dispatch-bound code,
-which is to say most of what the native backend was going to buy, for a
-day's work.
+behind a compiler check. Still untested, and now the only one of these
+four that is.
 
-Three of those four have now been tried. One worked, two did not, and
+**Nothing in the dispatch loop that does not have to be there.** This one
+was not on the list, and it is the one that worked. The loop began each
+instruction by testing `runtime_.traceExecution`, for a tracer almost
+nobody runs. Adding a second such test, for the debugger, cost 30% on a
+tight loop. Compiling both out instead — the loop is a template over a
+bool, instantiated once with them and once without — made every
+benchmark 7 to 12% faster than before either existed.
+
+Thirty per cent for one `if` in a loop that runs a few nanoseconds per
+pass. The lesson is not about tracing; it is that at this scale the
+dispatch loop has no room in it at all, and that anything measured
+without looking at what is already in that loop is measuring the wrong
+thing.
+
+Four of those five have now been tried. Two worked, two did not, and
 computed-goto dispatch is still untested. That is a worse hit rate than
 this file originally implied, and it sharpens the point rather than
 blunting it: if changes this targeted, guided by these measurements, are

@@ -16,6 +16,7 @@ add_executable(red
   src/chunk.cpp
   src/compiler.cpp
   src/debug.cpp
+  src/debugger.cpp
   src/runtime.cpp
   src/regex.cpp
   src/scanner.cpp

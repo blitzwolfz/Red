@@ -149,6 +149,7 @@ print(task.join());
 | `red program [args]` | Runs a program, source or compiled. |
 | `red compile in.red [-o out]` | Compiles ahead of time to a `.redc` file. |
 | `red test [directory]` | Runs the tests in a directory. |
+| `red debug script.red` | Runs a program under the debugger. |
 | `red repl` | Interactive prompt. Handles multi-line input. |
 | `red disasm script.red` | Prints the compiled bytecode. |
 | `red bench` | Runs the benchmark programs. |
@@ -160,6 +161,24 @@ print(task.join());
 `--gc-stress` is the one that matters. It turns a rare collector bug into
 one that happens on the first run. It found two real bugs while this was
 being written.
+
+`red debug` stops on lines, steps into, over and out of calls, sets
+breakpoints, and prints the locals in any frame by name.
+
+```
+$ red debug wordcount.red
+(red) b 14
+(red) c
+wordcount.red:14  in count
+  total = total + 1;
+(red) v
+  total            0
+  word             the
+(red) bt
+```
+
+It needs the source rather than a `.redc`, because a compiled file
+carries no names.
 
 ```
 $ red disasm examples/tiny.red
@@ -270,11 +289,11 @@ the same work and their output is compared. Reproduce with
 
 | benchmark | what it measures | red | python | ratio |
 |---|---|--:|--:|--:|
-| fib | recursive calls, no allocation | 0.23s | 0.16s | 1.40x |
-| loop | tight arithmetic loop | 1.09s | 0.91s | 1.21x |
-| string | building and inspecting short strings | 0.40s | 0.11s | 3.51x |
-| alloc | allocation churn, collector bound | 0.44s | 0.29s | 1.52x |
-| method | method dispatch through inheritance | 0.45s | 0.51s | 0.87x |
+| fib | recursive calls, no allocation | 0.20s | 0.16s | 1.23x |
+| loop | tight arithmetic loop | 0.97s | 0.95s | 1.03x |
+| string | building and inspecting short strings | 0.45s | 0.12s | 3.92x |
+| alloc | allocation churn, collector bound | 0.41s | 0.30s | 1.36x |
+| method | method dispatch through inheritance | 0.41s | 0.54s | 0.75x |
 
 A ratio below 1.00 means Red was faster.
 
@@ -395,8 +414,8 @@ print(output.split("\n").len());
   the price of never taking exponentially long.
   [Why](docs/stdlib.md#regular-expressions).
 - POSIX only. It builds on macOS and Linux; there is no Windows port.
-- No language server, no formatter, no debugger beyond `--trace`.
-  Syntax highlighting is in [editors/](editors).
+- No language server and no formatter. Syntax highlighting is in
+  [editors/](editors).
 - The virtual machine, the collector and the standard library are still
   C++. Only the compiler is self-hosted.
 - There is no package manager. A library is installed by copying it onto

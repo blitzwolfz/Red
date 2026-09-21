@@ -95,6 +95,15 @@ jobs:
       - name: Disassembler
         run: ./build/red disasm examples/tiny.red
 
+      # Drives the debugger over a script and checks that it stopped
+      # where it was told to and could name a local.
+      - name: Debugger
+        run: |
+          printf 'fun add(a, b) { return a + b; }\nlet total = 0;\nfor (let i in [1, 2]) { total = add(total, i); }\nprint(total);\n' > /tmp/dbg.red
+          printf 'b 3\nc\nv\np total\ns\nbt\nc\nc\nq\n' | ./build/red debug /tmp/dbg.red | tee /tmp/dbg.out
+          grep -q 'in add' /tmp/dbg.out
+          grep -q 'total' /tmp/dbg.out
+
       - name: Legacy interpreter
         run: ./build/red legacy legacy/main.red
 

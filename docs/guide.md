@@ -67,12 +67,21 @@ while brackets are open, so a class or a loop can be typed in over
 several lines.
 
 ```bash
+./build/red debug program.red
+```
+
+The debugger stops on lines. `s` steps into a call, `n` over it, `f` out
+of it, `b 14` sets a breakpoint, `v` lists the locals in the current
+frame by name and `bt` shows the call stack. It needs the source rather
+than a `.redc`, because a compiled file carries no names.
+
+```bash
 ./build/red --trace program.red
 ```
 
-That prints every instruction and the stack as it runs. You will not need
-it often, but when a program does something you cannot account for it
-answers the question immediately.
+That prints every instruction and the stack as it runs. Below the
+debugger, and worth reaching for when the question is about the bytecode
+rather than about the program.
 
 ## 1. A program that runs
 

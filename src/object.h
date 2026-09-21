@@ -76,6 +76,16 @@ struct ObjModule {
   bool loaded;
 };
 
+// One local variable's name, and the stretch of bytecode over which that
+// slot holds it. Slots are reused between scopes, so a slot number alone
+// does not name anything.
+struct LocalName {
+  std::string name;
+  int slot;
+  int start;
+  int end;
+};
+
 struct ObjFunction {
   Obj obj;
   // Parameters that must be supplied.
@@ -100,6 +110,11 @@ struct ObjFunction {
   // non-goals in PRD.md.
   std::vector<std::string> paramTypes;
   std::string returnType;
+  // Where each local lives and what it was called, for `red debug`.
+  // Filled in only when a function is compiled from source: a .redc does
+  // not carry it, because names are for people and the format is for the
+  // machine. Empty means the debugger shows slot numbers.
+  std::vector<LocalName> localNames;
 };
 
 using NativeFn = Value (*)(VM& vm, int argCount, Value* args);

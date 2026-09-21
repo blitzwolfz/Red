@@ -15,6 +15,7 @@
 
 #include "compiler.h"
 #include "debug.h"
+#include "debugger.h"
 #include "runtime.h"
 #include "scanner.h"
 #include "serialize.h"
@@ -44,6 +45,7 @@ void printUsage() {
       "  red compile <in.red> [-o f]  compile ahead of time to a .redc file\n"
       "  red repl                     start the interactive prompt\n"
       "  red test [directory]         run the tests in a directory\n"
+      "  red debug <script.red>       run a program under the debugger\n"
       "  red disasm <program>         print the compiled bytecode\n"
       "  red legacy <script.red>      run a script on the v1 Java interpreter\n"
       "  red bench [directory]        run the benchmark suite\n"
@@ -129,6 +131,56 @@ int runScript(Runtime& runtime, const std::string& path) {
   vm.detach();
 
   runtime.joinAllTasks();
+  if (status == InterpretResult::CompileError) return kExitCompileError;
+  if (status == InterpretResult::RuntimeError) return kExitRuntimeError;
+  return 0;
+}
+
+// `red debug program.red` runs the program with the debugger attached.
+// The source is needed, not a .redc: a compiled file carries no local
+// names and no way back to the lines.
+int debugScript(Runtime& runtime, const std::string& path,
+                const std::vector<std::string>& args) {
+  std::string source;
+  std::string resolved = absolutePath(path);
+  if (!readFile(resolved, &source)) {
+    std::fprintf(stderr, "Cannot open '%s'.\n", path.c_str());
+    return kExitUsage;
+  }
+  if (looksCompiled(source)) {
+    std::fprintf(stderr,
+                 "'%s' is compiled. Debugging needs the source, because a "
+                 ".redc carries no names.\n",
+                 path.c_str());
+    return kExitUsage;
+  }
+
+  for (const std::string& arg : args) runtime.scriptArgs.push_back(arg);
+
+  Debugger debugger(path, source);
+  runtime.debugger = &debugger;
+
+  VM vm(runtime);
+  vm.attach();
+  std::string name = path.substr(path.find_last_of('/') + 1);
+  size_t dot = name.find_last_of('.');
+  if (dot != std::string::npos) name = name.substr(0, dot);
+  ObjModule* module = makeModule(runtime, resolved, name);
+
+  debugger.start();
+  InterpretResult status = vm.interpret(source, module);
+  if (status == InterpretResult::RuntimeError) {
+    Value error = vm.lastError;
+    std::string message = isError(error)
+                              ? std::string(asError(error)->message->chars)
+                              : valueToString(error);
+    debugger.onError(vm, message);
+    reportRuntimeError(vm);
+  }
+  vm.detach();
+  runtime.debugger = nullptr;
+  runtime.joinAllTasks();
+
   if (status == InterpretResult::CompileError) return kExitCompileError;
   if (status == InterpretResult::RuntimeError) return kExitRuntimeError;
   return 0;
@@ -771,6 +823,14 @@ int main(int argc, const char* argv[]) {
     return 0;
   }
   if (command == "repl") return runRepl(runtime);
+  if (command == "debug") {
+    if (positional.size() < 2) {
+      std::fprintf(stderr, "Usage: red debug <script.red> [args...]\n");
+      return kExitUsage;
+    }
+    std::vector<std::string> rest(positional.begin() + 2, positional.end());
+    return debugScript(runtime, positional[1], rest);
+  }
   if (command == "disasm") {
     if (positional.size() < 2) {
       std::fprintf(stderr, "Usage: red disasm <script.red>\n");

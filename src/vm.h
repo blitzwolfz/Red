@@ -63,6 +63,12 @@ class VM {
   Runtime& runtime() { return runtime_; }
   ObjModule* currentModule();
 
+  // For the debugger: how deep the call stack is, and the frame on top.
+  int frameDepth() const { return frameCount_; }
+  CallFrame* topFrame() {
+    return frameCount_ == 0 ? nullptr : &frames_[frameCount_ - 1];
+  }
+
   // Turns a value into text the way print does. A class may define a
   // str() method of its own, which is why this needs the VM and the
   // plain valueToString() does not. Containers are walked, so a class
@@ -140,6 +146,13 @@ class VM {
   int baseFrame_ = 0;
 
   InterpretResult run(int baseFrame);
+  // The dispatch loop. Instantiated twice: once with the debugger and
+  // tracer compiled in, and once with them compiled out entirely. A
+  // single `if` at the top of the loop, even on a flag held in a
+  // register, cost 30% on a tight loop, because it is one more basic
+  // block in the place where there should be none.
+  template <bool Instrumented>
+  InterpretResult runLoop(int baseFrame);
 
   bool call(ObjClosure* closure, int argCount);
   bool callValue(Value callee, int argCount);

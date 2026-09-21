@@ -122,6 +122,9 @@ class Runtime {
   // core runtime knowing what is in them.
   std::vector<Table*> rootTables;
 
+  // Set by `red debug`. The dispatch loop checks it once an instruction,
+  // which costs one branch that is never taken in an ordinary run.
+  class Debugger* debugger = nullptr;
   bool traceExecution = false;
   bool logGC = false;
   bool stressGC = false;

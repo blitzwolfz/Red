@@ -42,6 +42,8 @@ struct Local {
   int depth;
   bool isCaptured;
   bool isConst;
+  // Where this local's entry sits in the function's debug table.
+  int debugIndex = -1;
 };
 
 struct CompilerUpvalue {
@@ -240,6 +242,9 @@ class Compiler {
   // for-in needs to read the name first to see whether "in" follows.
   int declareParsedVariable(const std::string& name, bool isConst);
   void markInitialized();
+  void noteLocalStart(Local& local);
+  void noteLocalEnd(Local& local);
+  void closeLocalNames(FunctionState& state);
   void defineVariable(int global, bool isConst);
   int resolveLocal(FunctionState* state, const std::string& name);
   int resolveUpvalue(FunctionState* state, const std::string& name);
@@ -536,6 +541,7 @@ void Compiler::endScope() {
     } else {
       emitByte(OP_POP);
     }
+    noteLocalEnd(state_->locals.back());
     state_->locals.pop_back();
   }
 }
@@ -545,10 +551,15 @@ void Compiler::addLocal(const std::string& name, bool isConst) {
     error("Too many local variables in function.");
     return;
   }
-  state_->locals.push_back({name, -1, false, isConst});
+  state_->locals.push_back({name, -1, false, isConst, -1});
   if ((int)state_->locals.size() > state_->maxLocals) {
     state_->maxLocals = (int)state_->locals.size();
   }
+  // The slot is known now; when it becomes readable and when it stops
+  // being readable are filled in as those happen.
+  state_->locals.back().debugIndex = (int)state_->function->localNames.size();
+  state_->function->localNames.push_back(
+      {name, (int)state_->locals.size() - 1, -1, -1});
 }
 
 void Compiler::declareVariable(const std::string& name, bool isConst) {
@@ -579,13 +590,41 @@ int Compiler::addHiddenLocal(const char* name) {
   addLocal(name, true);
   // Usable straight away, including at the top level where
   // markInitialized does nothing.
+  noteLocalStart(state_->locals.back());
   state_->locals.back().depth = state_->scopeDepth;
   return (int)state_->locals.size() - 1;
 }
 
 void Compiler::markInitialized() {
+  noteLocalStart(state_->locals.back());
   if (state_->scopeDepth == 0) return;
   state_->locals.back().depth = state_->scopeDepth;
+}
+
+// A local is readable from here on, so this is where its debug entry
+// starts. Called again for the same local does nothing: the first point
+// is the right one.
+// Locals the body never popped, which is every one still live when the
+// function returns, run to the end of its code.
+void Compiler::closeLocalNames(FunctionState& state) {
+  int end = (int)state.function->chunk.code.size();
+  for (LocalName& entry : state.function->localNames) {
+    if (entry.start < 0) entry.start = 0;
+    if (entry.end < 0) entry.end = end;
+  }
+}
+
+void Compiler::noteLocalStart(Local& local) {
+  if (local.debugIndex < 0) return;
+  LocalName& entry = state_->function->localNames[(size_t)local.debugIndex];
+  if (entry.start < 0) entry.start = (int)chunk().code.size();
+}
+
+void Compiler::noteLocalEnd(Local& local) {
+  if (local.debugIndex < 0) return;
+  LocalName& entry = state_->function->localNames[(size_t)local.debugIndex];
+  if (entry.start < 0) entry.start = (int)chunk().code.size();
+  entry.end = (int)chunk().code.size();
 }
 
 void Compiler::defineVariable(int global, bool isConst) {
@@ -836,6 +875,7 @@ void Compiler::destructuringDeclaration(bool isConst) {
     // so only the hidden slots are left to clear.
     for (int i = 0; i < hidden; i++) {
       emitByte(OP_POP);
+      noteLocalEnd(state_->locals.back());
       state_->locals.pop_back();
     }
   }
@@ -1089,6 +1129,7 @@ void Compiler::function(FunctionKind kind, const std::string& name) {
   block();
 
   emitReturn();
+  closeLocalNames(state);
   state.function->slotCount = state.maxLocals + state.maxTemps + 8;
   ObjFunction* function = state.function;
   state_ = state.enclosing;
@@ -2109,6 +2150,7 @@ ObjFunction* Compiler::compileScript() {
     declaration();
   }
   emitReturn();
+  closeLocalNames(state);
   state.function->slotCount = state.maxLocals + state.maxTemps + 8;
 
   runtime_.popRoot();
