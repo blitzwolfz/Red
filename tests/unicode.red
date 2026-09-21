@@ -59,5 +59,26 @@ let every = "";
 for (let code in range(0, 256)) { every += chr(code); }
 print(every.chars().join("") == every);   // expect: true
 
-// Case conversion is ASCII only, and says so rather than pretending.
-print("héllo".upper());              // expect: HéLLO
+// Case conversion covers the whole of Unicode: the simple one-to-one
+// mappings, and the handful that change length.
+print("héllo".upper());                   // expect: HÉLLO
+print("HÉLLO".lower());                   // expect: héllo
+print("αθηνα".upper());                   // expect: ΑΘΗΝΑ
+print("ПРИВЕТ".lower());                  // expect: привет
+print("straße".upper());                  // expect: STRASSE
+print("ﬁle".upper());                     // expect: FILE
+print("abc123!".upper());                 // expect: ABC123!
+
+// Data that is not text is copied through rather than mangled.
+let mixed = "";
+for (let code in [200, 97, 255]) { mixed += chr(code); }
+print(mixed.upper().bytes());             // expect: [200, 65, 255]
+
+// The regex ignore-case flag uses the same mappings.
+print(regex("café", "i").test("CAFÉ"));   // expect: true
+print(regex("абв", "i").test("АБВ"));     // expect: true
+print(regex("[à-ÿ]+", "i").find("xÉÈy")["text"]);   // expect: ÉÈ
+
+// Except where a mapping changes the length, which a matcher working one
+// character at a time cannot represent.
+print(regex("straße", "i").test("STRASSE"));       // expect: false

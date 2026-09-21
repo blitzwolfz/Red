@@ -21,6 +21,7 @@ add_executable(red
   src/scanner.cpp
   src/serialize.cpp
   src/table.cpp
+  src/unicode.cpp
   src/util.cpp
   src/value.cpp
   src/vm.cpp

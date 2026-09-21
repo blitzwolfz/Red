@@ -391,7 +391,6 @@ print(output.split("\n").len());
   `eq()` for `==`, but not how it hashes, because the table cannot call
   back into Red while it is probing.
   [Why](docs/language.md#str-and-eq).
-- `upper()`, `lower()` and the regex `i` flag only change ASCII letters.
 - Regular expressions have no backreferences and no lookaround, which is
   the price of never taking exponentially long.
   [Why](docs/stdlib.md#regular-expressions).

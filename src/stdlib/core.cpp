@@ -7,6 +7,7 @@
 #include <ctime>
 #include <random>
 
+#include "../unicode.h"
 #include "../util.h"
 #include "../vm.h"
 #include "builtins.h"
@@ -528,14 +529,12 @@ Value stringTrimEnd(VM& vm, int, Value* args) {
 }
 
 Value stringUpper(VM& vm, int, Value* args) {
-  std::string text = textOf(asString(args[0]));
-  for (char& c : text) c = (char)std::toupper((unsigned char)c);
+  std::string text = toUpperCase(textOf(asString(args[0])));
   return objValue((Obj*)vm.runtime().copyString(text.data(), text.size()));
 }
 
 Value stringLower(VM& vm, int, Value* args) {
-  std::string text = textOf(asString(args[0]));
-  for (char& c : text) c = (char)std::tolower((unsigned char)c);
+  std::string text = toLowerCase(textOf(asString(args[0])));
   return objValue((Obj*)vm.runtime().copyString(text.data(), text.size()));
 }
 

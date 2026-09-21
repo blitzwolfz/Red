@@ -90,8 +90,14 @@ print("caf\u00e9");              // café
 print("\u{1f600}");              // 😀
 ```
 
-`upper()` and `lower()` only change the ASCII letters. Anything else is
-left as it is.
+`upper()` and `lower()` cover the whole of Unicode. That includes the
+characters whose case changes their length, so `"straße".upper()` is
+`"STRASSE"` and `"ﬁle".upper()` is `"FILE"`. Bytes that are not valid
+UTF-8 are copied through untouched.
+
+What is not covered is case that depends on the language: Turkish
+dotless i stays dotless, and Greek final sigma is not distinguished.
+Doing those needs a locale, and Red has none.
 
 ## Maths
 
@@ -320,7 +326,7 @@ Task methods:
 
 | Flag | |
 |---|---|
-| `i` | Ignore case. ASCII letters only, the same place `upper()` stops. |
+| `i` | Ignore case, using the same mappings as `upper()` and `lower()`. |
 | `m` | `^` and `$` also meet a line break. |
 | `s` | `.` also meets a newline. |
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "unicode.h"
 #include "util.h"
 
 namespace red {
@@ -18,12 +19,14 @@ bool isWordCodePoint(uint32_t c) {
          (c >= 'A' && c <= 'Z') || c == '_';
 }
 
-// The other case of an ASCII letter, or the code point unchanged. Case
-// folding stops at ASCII here, the same place upper() and lower() stop.
+// The other case of a letter, or the code point unchanged. This is the
+// simple mapping, so it agrees with upper() and lower() on everything
+// except the few characters whose case changes their length, which a
+// character-at-a-time matcher cannot represent anyway.
 uint32_t swapCase(uint32_t c) {
-  if (c >= 'a' && c <= 'z') return c - 'a' + 'A';
-  if (c >= 'A' && c <= 'Z') return c - 'A' + 'a';
-  return c;
+  uint32_t other = simpleToUpper(c);
+  if (other != c) return other;
+  return simpleToLower(c);
 }
 
 // Targets are indexes into the fragment that holds them, so joining two
@@ -572,13 +575,15 @@ class Parser {
       inst.ranges.push_back({low, high});
       if (ignoreCase_) {
         // Folding the range rather than the subject keeps the matcher
-        // free of case rules. Only the ASCII letters inside it move.
-        uint32_t foldLow = low < 'A' ? 'A' : low;
-        uint32_t foldHigh = high > 'z' ? 'z' : high;
-        for (uint32_t c = foldLow; c <= foldHigh && c <= 'z'; c++) {
-          if (c < low || c > high) continue;
-          uint32_t other = swapCase(c);
-          if (other != c) inst.ranges.push_back({other, other});
+        // free of case rules. A range wider than this is one nobody
+        // wrote to mean letters, and walking it would cost more than the
+        // whole match.
+        constexpr uint32_t kMaxFoldSpan = 4096;
+        if (high - low <= kMaxFoldSpan) {
+          for (uint32_t c = low; c <= high; c++) {
+            uint32_t other = swapCase(c);
+            if (other != c) inst.ranges.push_back({other, other});
+          }
         }
       }
     }

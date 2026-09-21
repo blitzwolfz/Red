@@ -143,6 +143,9 @@ for (let c in greeting) { write(c, "."); }   // h.é.l.l.o.
 
 [stdlib.md](stdlib.md#text-and-bytes) has the whole pair of tables.
 
+`upper()` and `lower()` cover all of Unicode, including the mappings that
+change length: `"straße".upper()` is `"STRASSE"`.
+
 ## Operators
 
 From loosest to tightest:
