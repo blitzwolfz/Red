@@ -1,5 +1,6 @@
 #include "value.h"
 
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 
@@ -14,19 +15,40 @@ namespace {
 // than a truncated message.
 constexpr int kMaxPrintDepth = 8;
 
+// Largest double that counts by one: 2^53. Integers up to here are the
+// ones a reader thinks of as integers, and each has an exact decimal
+// form of its own.
+constexpr double kExactIntegerLimit = 9007199254740992.0;
+
 std::string numberToString(double value) {
   if (std::isnan(value)) return "nan";
   if (std::isinf(value)) return value > 0 ? "inf" : "-inf";
+
   // Whole numbers print without a fractional part, which is what users
-  // expect from a language with a single number type.
-  if (value == std::floor(value) && std::fabs(value) < 1e15) {
+  // expect from a language with a single number type. Above 2^53 that
+  // would print digits the double does not actually carry, so the
+  // shortest form below takes over and says 1e+16 instead.
+  if (value == std::trunc(value) && std::fabs(value) <= kExactIntegerLimit) {
     char buffer[32];
     std::snprintf(buffer, sizeof(buffer), "%.0f", value);
     return buffer;
   }
-  char buffer[32];
-  std::snprintf(buffer, sizeof(buffer), "%.14g", value);
-  return buffer;
+
+  // The shortest text that reads back as this exact double. Every number
+  // Red prints can therefore be parsed again with num() and give back
+  // what it started as, which a fixed precision like %.14g cannot
+  // promise: it silently dropped the last three bits of every value.
+  char buffer[64];
+  std::to_chars_result result =
+      std::to_chars(buffer, buffer + sizeof(buffer), value,
+                    std::chars_format::general);
+  if (result.ec != std::errc()) {
+    // Cannot happen for a finite double in 64 bytes, but a wrong answer
+    // is worse than a long one.
+    std::snprintf(buffer, sizeof(buffer), "%.17g", value);
+    return buffer;
+  }
+  return std::string(buffer, result.ptr);
 }
 
 std::string escapeString(const std::string& text) {
