@@ -194,6 +194,11 @@ red fmt --check *.red       # exit 1 if anything would change
 It refuses rather than writes if the result would not read back as the
 same tokens, so a bug in it cannot mangle a file.
 
+There is a language server too, [`tools/red-lsp.red`](tools/red-lsp.red),
+written in Red. It gives an editor the compiler's own diagnostics as you
+type, document symbols, go to definition, hover and completion.
+[editors/README.md](editors/README.md) has the settings.
+
 ```
 $ red disasm examples/tiny.red
 == square ==
@@ -364,6 +369,7 @@ stack that is not moving and can be scanned safely.
 | [`src/debug.cpp`](src/debug.cpp) | The disassembler, shared with `--trace`. |
 | [`src/stdlib/`](src/stdlib) | Built-in functions and methods. |
 | [`selfhost/redc.red`](selfhost/redc.red) | The same scanner, compiler and writer, in Red. |
+| [`tools/red-lsp.red`](tools/red-lsp.red) | The language server, also in Red. |
 | [`lib/`](lib) | Libraries that ship with the interpreter. |
 | [`ffi/`](ffi) | The extension contract, in C and C++. |
 | [`legacy/`](legacy) | The v1 interpreter, in Java, still working. |
@@ -428,7 +434,9 @@ print(output.split("\n").len());
   the price of never taking exponentially long.
   [Why](docs/stdlib.md#regular-expressions).
 - POSIX only. It builds on macOS and Linux; there is no Windows port.
-- No language server. Syntax highlighting is in [editors/](editors).
+- The language server knows nothing about types and does not follow a
+  name into another file. Both want a syntax tree, and the compiler
+  throws one away as it goes.
 - `red fmt` re-indents and re-spaces but does not re-wrap, so alignment
   inside a long expression is not preserved.
 - The virtual machine, the collector and the standard library are still

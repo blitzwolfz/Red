@@ -86,9 +86,30 @@ bool requireOpen(VM& vm, ObjFile* file, const char* who) {
   return true;
 }
 
-Value fileRead(VM& vm, int, Value* args) {
+// read() takes the whole file. read(count) takes exactly that many
+// bytes, or fewer at the end, which is what a protocol with a length
+// header in front of each message needs.
+Value fileRead(VM& vm, int argCount, Value* args) {
   ObjFile* file = asFile(args[0]);
   if (!requireOpen(vm, file, "read()")) return nilValue();
+
+  if (argCount > 1 && !isNil(args[1])) {
+    if (!isNumber(args[1]) || asNumber(args[1]) < 0) {
+      return vm.failAs("type", "read() expects a count of zero or more.");
+    }
+    size_t wanted = (size_t)asNumber(args[1]);
+    std::string contents;
+    contents.resize(wanted);
+    size_t got = wanted == 0
+                     ? 0
+                     : std::fread(&contents[0], 1, wanted, file->handle);
+    contents.resize(got);
+    // nil at the end of the file, so a reader can tell "nothing left"
+    // from "an empty message".
+    if (got == 0 && wanted > 0) return nilValue();
+    return objValue(
+        (Obj*)vm.runtime().copyString(contents.data(), contents.size()));
+  }
 
   std::string contents;
   char buffer[4096];
@@ -315,7 +336,7 @@ void installIO(Runtime& runtime) {
   defineGlobalFn(runtime, "file_size", nativeFileSize, 1);
   defineGlobalFn(runtime, "modified", nativeModified, 1);
 
-  defineMethodFn(runtime, ObjType::File, "read", fileRead, 1);
+  defineMethodFn(runtime, ObjType::File, "read", fileRead, -1);
   defineMethodFn(runtime, ObjType::File, "read_line", fileReadLine, 1);
   defineMethodFn(runtime, ObjType::File, "lines", fileLines, 1);
   defineMethodFn(runtime, ObjType::File, "write", fileWrite, -1);

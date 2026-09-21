@@ -191,6 +191,13 @@ Value nativeFormatTime(VM& vm, int argCount, Value* args) {
   return vm.fail("format_time() pattern produced more than 8192 characters.");
 }
 
+// Where this interpreter is. A program that wants to start another copy
+// of Red, as the language server does to get diagnostics, needs it.
+Value nativeExePath(VM& vm, int, Value*) {
+  std::string path = absolutePath(executablePath());
+  return objValue((Obj*)vm.runtime().copyString(path.data(), path.size()));
+}
+
 Value nativeExists(VM& vm, int, Value* args) {
   if (!isString(args[0])) {
     return vm.fail("exists() expects a string, got %s.", valueTypeName(args[0]));
@@ -246,6 +253,7 @@ void installOS(Runtime& runtime) {
   defineGlobalFn(runtime, "date", nativeDate, -1);
   defineGlobalFn(runtime, "format_time", nativeFormatTime, -1);
   defineGlobalFn(runtime, "cwd", nativeCwd, 0);
+  defineGlobalFn(runtime, "exe_path", nativeExePath, 0);
   defineGlobalFn(runtime, "source_path", nativeSourcePath, 0);
   defineGlobalFn(runtime, "source_dir", nativeSourceDir, 0);
   defineGlobalFn(runtime, "library_paths", nativeLibraryPaths, 0);

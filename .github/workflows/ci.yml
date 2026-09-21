@@ -97,6 +97,12 @@ jobs:
       - name: Formatting
         run: ./build/red fmt --check $(find tests examples lib selfhost bench -name '*.red' | sort)
 
+      # Drives the language server through a session and checks it
+      # answered: capabilities, symbols, and a diagnostic for a file
+      # that does not compile.
+      - name: Language server
+        run: python3 tools/lsp_smoke.py ./build/red tools/red-lsp.red
+
       - name: Disassembler
         run: ./build/red disasm examples/tiny.red
 
