@@ -252,13 +252,22 @@ struct ObjChannel {
   size_t capacity;
   std::deque<Value> buffer;
   bool closed;
-  // Number of tasks currently parked on this channel. Used only to report
-  // a clean error when every task would block forever.
+  // Number of tasks currently parked on this channel, of either kind.
   int waiters;
+  // Fibers parked on this channel, waiting to send and waiting to
+  // receive. A task running on an operating system thread instead waits
+  // on the runtime's condition variable, so both lists can be empty
+  // while tasks are still waiting.
+  std::vector<struct Fiber*> sendWaiters;
+  std::vector<struct Fiber*> recvWaiters;
 };
 
 struct ObjTask {
   Obj obj;
+  // Set only for a task running on an operating system thread of its
+  // own, which is what a task was before the scheduler existed and what
+  // one still is outside it: in the REPL, the debugger and the test
+  // runner.
   std::thread* thread;
   VM* vm;
   // The call to perform on the new thread. Held here rather than on a
@@ -277,6 +286,14 @@ struct ObjTask {
   // What the task failed with, kept whole so that join() can raise the
   // same error rather than a description of one. Nil when it succeeded.
   Value error;
+  // Where this task sits in the runtime's list of live tasks, so that
+  // finishing one costs a swap rather than a search through every task
+  // a program has running.
+  long liveIndex;
+  // Fibers parked in join() on this task. Woken, under the task mutex,
+  // by the fiber that finishes it. Empty for a task nobody is waiting
+  // on, which is the common case.
+  std::vector<struct Fiber*> waiters;
 };
 
 struct ObjFile {
@@ -291,6 +308,9 @@ struct ObjSocket {
   int fd;
   bool listening;
   bool closed;
+  // How long a read, a write, an accept or a connect may wait before
+  // giving up. Zero means forever, which is the default.
+  double timeout;
 };
 
 struct ObjNativeLib {

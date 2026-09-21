@@ -137,6 +137,7 @@ class VM {
 
   Value* stack_ = nullptr;
   Value* stackTop_ = nullptr;
+  size_t stackBytes_ = 0;
   CallFrame frames_[kMaxFrames];
   int frameCount_ = 0;
   std::vector<TryHandler> handlers_;

@@ -44,6 +44,12 @@ struct Thread {
   // False while this thread is running bytecode and its stack is
   // moving. True where the collector may scan it.
   std::atomic<bool> parked{false};
+  // Where this entry sits in the runtime's list. Kept up to date so that
+  // leaving costs a swap rather than a search: a program with a hundred
+  // thousand fibers has a hundred thousand entries, and searching each
+  // one out on the way past is the difference between linear and
+  // quadratic.
+  size_t index = 0;
 };
 
 class Runtime {
@@ -85,6 +91,12 @@ class Runtime {
   void clearThreadVM(Thread* thread, VM* vm);
   // The calling thread's entry.
   static Thread* currentThread();
+  // Rebinds what the calling thread counts as its entry.
+  //
+  // The scheduler calls this on every fiber switch. One operating system
+  // thread runs many fibers, each with an entry of its own, so which one
+  // is current changes without the thread changing.
+  void setCurrentThread(Thread* thread);
   // The runtime attached to the calling thread. This is primarily for
   // helpers such as the value printer that receive an object but not a
   // VM and still need its aggregate guard.
@@ -282,6 +294,10 @@ class Runtime {
                             bool share);
 
   std::vector<Obj*> grayStack_;
+  // Guards liveTasks_. Held only for the moment it takes to add or drop
+  // an entry, and never while anything that can allocate runs, so the
+  // collector can take it too.
+  std::mutex taskListMutex_;
   std::vector<ObjTask*> liveTasks_;
   Thread* mainThread_ = nullptr;
   // Set while the collector is running so that allocations made by the

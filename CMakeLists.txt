@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(red LANGUAGES C CXX VERSION 0.5.0)
+project(red LANGUAGES C CXX ASM VERSION 0.5.0)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,6 +15,9 @@ option(RED_SANITIZE_THREAD "Build with the thread sanitizer" OFF)
 add_executable(red
   src/main.cpp
   src/pkg.cpp
+  src/sched.cpp
+  src/sched_tls.cpp
+  src/fiber_asm.S
   src/bundle.cpp
   src/chunk.cpp
   src/compiler.cpp

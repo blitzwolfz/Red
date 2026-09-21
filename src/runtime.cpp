@@ -51,6 +51,11 @@ std::atomic<bool> gParallel{false};
 
 Thread* Runtime::currentThread() { return t_thread; }
 
+void Runtime::setCurrentThread(Thread* thread) {
+  t_thread = thread;
+  t_runtime = this;
+}
+
 Runtime* Runtime::current() { return t_runtime; }
 
 // Takes the interner's lock, and only bothers once a second thread
@@ -101,6 +106,7 @@ Thread* Runtime::newThread() {
   // The collector walks this list without holding the mutex, so it must
   // not grow underneath it.
   while (collecting_) worldCond_.wait(guard);
+  thread->index = threads_.size();
   threads_.push_back(thread);
   if (caller != nullptr) {
     caller->parked.store(false, std::memory_order_release);
@@ -135,8 +141,9 @@ void Runtime::detachThread(Thread* thread) {
   // Same reason as newThread: the list this thread is about to leave is
   // one the collector may be walking.
   while (collecting_) worldCond_.wait(guard);
-  for (size_t i = 0; i < threads_.size(); i++) {
-    if (threads_[i] != thread) continue;
+  if (thread->index < threads_.size() && threads_[thread->index] == thread) {
+    size_t i = thread->index;
+    {
     thread->vm = nullptr;
     // What this thread allocated outlives it, so the objects move to
     // the thread that is left rather than being freed or orphaned.
@@ -154,8 +161,13 @@ void Runtime::detachThread(Thread* thread) {
         thread->bytesAllocated = 0;
       }
     }
-    threads_.erase(threads_.begin() + (long)i);
-    break;
+    }
+    // Swapped with the last entry rather than erased from the middle.
+    // The collector walks this list as a set, so order means nothing to
+    // it.
+    threads_[i] = threads_.back();
+    threads_[i]->index = i;
+    threads_.pop_back();
   }
   // A thread that has gone must not hold the collector up.
   worldCond_.notify_all();
@@ -503,6 +515,8 @@ ObjTask* Runtime::newTask() {
   task->joined = false;
   task->reaped.store(false, std::memory_order_relaxed);
   task->error = nilValue();
+  task->waiters.clear();
+  task->liveIndex = -1;
   return task;
 }
 
@@ -521,6 +535,7 @@ ObjSocket* Runtime::newSocket(int fd, bool listening) {
   socket->fd = fd;
   socket->listening = listening;
   socket->closed = false;
+  socket->timeout = 0;
   return socket;
 }
 
@@ -578,15 +593,28 @@ ObjError* Runtime::newError(ObjString* message, ObjString* trace,
 void Runtime::pushRoot(Obj* obj) { t_thread->tempRoots.push_back(obj); }
 void Runtime::popRoot() { t_thread->tempRoots.pop_back(); }
 
-void Runtime::registerTask(ObjTask* task) { liveTasks_.push_back(task); }
+void Runtime::registerTask(ObjTask* task) {
+  // Tasks are spawned from whichever task happens to be running, so this
+  // list is shared and needs the same guard the rest of the shared state
+  // has. It used to be written without one.
+  std::lock_guard<std::mutex> guard(taskListMutex_);
+  task->liveIndex = (long)liveTasks_.size();
+  liveTasks_.push_back(task);
+}
 
 void Runtime::retireTask(ObjTask* task) {
-  for (size_t i = 0; i < liveTasks_.size(); i++) {
-    if (liveTasks_[i] == task) {
-      liveTasks_.erase(liveTasks_.begin() + (long)i);
-      return;
-    }
+  std::lock_guard<std::mutex> guard(taskListMutex_);
+  // Swapped with the last entry rather than searched for. This list is
+  // only a root set, so its order says nothing.
+  long index = task->liveIndex;
+  if (index < 0 || index >= (long)liveTasks_.size() ||
+      liveTasks_[(size_t)index] != task) {
+    return;
   }
+  liveTasks_[(size_t)index] = liveTasks_.back();
+  liveTasks_[(size_t)index]->liveIndex = index;
+  liveTasks_.pop_back();
+  task->liveIndex = -1;
 }
 
 void Runtime::reapTask(ObjTask* task) {
@@ -600,8 +628,7 @@ void Runtime::reapTask(ObjTask* task) {
 void Runtime::joinAllTasks() {
   std::vector<ObjTask*> pending;
   {
-    lockParked(lock);
-    std::lock_guard<std::mutex> guard(lock, std::adopt_lock);
+    std::lock_guard<std::mutex> guard(taskListMutex_);
     pending = liveTasks_;
   }
   // Joined outside the lock, because a task that is still running needs
@@ -645,7 +672,10 @@ void Runtime::markRoots() {
   for (Thread* thread : threads_) {
     for (Obj* obj : thread->tempRoots) markObject(obj);
   }
-  for (ObjTask* task : liveTasks_) markObject((Obj*)task);
+  {
+    std::lock_guard<std::mutex> guard(taskListMutex_);
+    for (ObjTask* task : liveTasks_) markObject((Obj*)task);
+  }
 
   markObject((Obj*)initString);
   markObject((Obj*)messageString);

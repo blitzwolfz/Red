@@ -21,6 +21,7 @@
 #include "format.h"
 #include "pkg.h"
 #include "runtime.h"
+#include "sched.h"
 #include "scanner.h"
 #include "serialize.h"
 #include "stdlib/builtins.h"
@@ -114,38 +115,47 @@ int runScript(Runtime& runtime, const std::string& path) {
   // script from elsewhere still uses its own red.mod.
   setProjectDirectory(directoryOf(resolved));
 
-  VM vm(runtime);
-  vm.attach();
-  std::string name = path.substr(path.find_last_of('/') + 1);
-  size_t dot = name.find_last_of('.');
-  if (dot != std::string::npos) name = name.substr(0, dot);
+  // The program runs on the scheduler, as the first fiber. Everything it
+  // spawns is a fiber too, and anything any of them waits for parks a
+  // fiber rather than stopping an operating system thread. runMain
+  // returns once the program and every task it left running have
+  // finished, which is what joinAllTasks used to wait for.
+  int exitCode = 0;
+  Scheduler::instance().runMain(runtime, SchedulerOptions(), [&] {
+    VM vm(runtime);
+    vm.attach();
+    std::string name = path.substr(path.find_last_of('/') + 1);
+    size_t dot = name.find_last_of('.');
+    if (dot != std::string::npos) name = name.substr(0, dot);
 
-  ObjModule* module = makeModule(runtime, resolved, name);
+    ObjModule* module = makeModule(runtime, resolved, name);
 
-  InterpretResult status;
-  if (looksCompiled(source)) {
-    // Already compiled, so the compiler never runs.
-    std::string reason;
-    ObjFunction* function = readCompiled(runtime, source, module, &reason);
-    if (function == nullptr) {
-      std::fprintf(stderr, "Cannot load '%s': %s\n", path.c_str(),
-                   reason.c_str());
-      vm.detach();
-      runtime.joinAllTasks();
-      return kExitCompileError;
+    InterpretResult status;
+    if (looksCompiled(source)) {
+      // Already compiled, so the compiler never runs.
+      std::string reason;
+      ObjFunction* function = readCompiled(runtime, source, module, &reason);
+      if (function == nullptr) {
+        std::fprintf(stderr, "Cannot load '%s': %s\n", path.c_str(),
+                     reason.c_str());
+        vm.detach();
+        exitCode = kExitCompileError;
+        return;
+      }
+      status = vm.runFunction(function);
+    } else {
+      status = vm.interpret(source, module);
     }
-    status = vm.runFunction(function);
-  } else {
-    status = vm.interpret(source, module);
-  }
 
-  if (status == InterpretResult::RuntimeError) reportRuntimeError(vm);
-  vm.detach();
+    if (status == InterpretResult::RuntimeError) reportRuntimeError(vm);
+    vm.detach();
+
+    if (status == InterpretResult::CompileError) exitCode = kExitCompileError;
+    if (status == InterpretResult::RuntimeError) exitCode = kExitRuntimeError;
+  });
 
   runtime.joinAllTasks();
-  if (status == InterpretResult::CompileError) return kExitCompileError;
-  if (status == InterpretResult::RuntimeError) return kExitRuntimeError;
-  return 0;
+  return exitCode;
 }
 
 // `red debug program.red` runs the program with the debugger attached.
@@ -306,29 +316,36 @@ int runBundled(Runtime& runtime, const std::string& executable,
 
   installBuiltins(runtime);
 
-  VM vm(runtime);
-  vm.attach();
-  // The module keeps the path it had when it was built, because that is
-  // the key its own imports are recorded under.
-  ObjModule* module =
-      makeModule(runtime, bundle.modules[bundle.entry].path, name);
+  // A built program runs on the scheduler exactly as the same source
+  // does through `red run`, so that a program does not behave
+  // differently for having been built.
+  int exitCode = 0;
+  Scheduler::instance().runMain(runtime, SchedulerOptions(), [&] {
+    VM vm(runtime);
+    vm.attach();
+    // The module keeps the path it had when it was built, because that
+    // is the key its own imports are recorded under.
+    ObjModule* module =
+        makeModule(runtime, bundle.modules[bundle.entry].path, name);
 
-  ObjFunction* function =
-      readCompiled(runtime, bundle.modules[bundle.entry].code, module, &reason);
-  if (function == nullptr) {
-    std::fprintf(stderr, "%s: damaged program: %s\n", name.c_str(),
-                 reason.c_str());
+    std::string loadProblem;
+    ObjFunction* function = readCompiled(
+        runtime, bundle.modules[bundle.entry].code, module, &loadProblem);
+    if (function == nullptr) {
+      std::fprintf(stderr, "%s: damaged program: %s\n", name.c_str(),
+                   loadProblem.c_str());
+      vm.detach();
+      exitCode = kExitCompileError;
+      return;
+    }
+
+    InterpretResult status = vm.runFunction(function);
+    if (status == InterpretResult::RuntimeError) reportRuntimeError(vm);
     vm.detach();
-    runtime.joinAllTasks();
-    return kExitCompileError;
-  }
-
-  InterpretResult status = vm.runFunction(function);
-  if (status == InterpretResult::RuntimeError) reportRuntimeError(vm);
-  vm.detach();
+    if (status == InterpretResult::RuntimeError) exitCode = kExitRuntimeError;
+  });
   runtime.joinAllTasks();
-  if (status == InterpretResult::RuntimeError) return kExitRuntimeError;
-  return 0;
+  return exitCode;
 }
 
 // Every module path this function's code imports, in the order the

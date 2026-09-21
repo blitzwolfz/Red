@@ -1,5 +1,7 @@
 #include "vm.h"
 
+#include <sys/mman.h>
+
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -9,6 +11,7 @@
 #include "debug.h"
 #include "debugger.h"
 #include "pkg.h"
+#include "sched.h"
 #include "serialize.h"
 #include "types.h"
 #include "stdlib/builtins.h"
@@ -54,6 +57,10 @@ void taskMain(Runtime* runtime, ObjTask* task, Thread* thread) {
         task->error = vm.lastError;
       }
       task->done = true;
+      // A fiber can be waiting on a task that runs on a thread, which
+      // happens when the scheduler starts after the task did.
+      for (Fiber* waiter : task->waiters) Scheduler::ready(waiter);
+      task->waiters.clear();
     }
   }
   runtime->cond.notify_all();
@@ -65,11 +72,29 @@ void taskMain(Runtime* runtime, ObjTask* task, Thread* thread) {
 VM::VM(Runtime& runtime) : runtime_(runtime) {
   // One contiguous block per task. Slot pointers are handed out to call
   // frames and to open upvalues, so this must never be reallocated.
-  stack_ = new Value[kMaxStack];
+  //
+  // Mapped rather than allocated. A megabyte a task was affordable when
+  // a task was an operating system thread and a program had a few; a
+  // program can now have a hundred thousand fibers, and allocating this
+  // outright would be a hundred gigabytes of memory that is almost
+  // entirely untouched. Mapping it costs the pages a task actually uses
+  // and nothing for the rest.
+  stackBytes_ = sizeof(Value) * kMaxStack;
+  void* memory = ::mmap(nullptr, stackBytes_, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (memory == MAP_FAILED) {
+    // Out of address space rather than out of memory, and there is
+    // nothing useful a task can do without a stack.
+    std::fprintf(stderr, "Cannot map a value stack for a task.\n");
+    std::abort();
+  }
+  stack_ = (Value*)memory;
   stackTop_ = stack_;
 }
 
-VM::~VM() { delete[] stack_; }
+VM::~VM() {
+  if (stack_ != nullptr) ::munmap(stack_, stackBytes_);
+}
 
 void VM::attach(Thread* thread) {
   if (thread != nullptr) {
@@ -727,9 +752,18 @@ bool VM::spawnTask(int argCount) {
   stackTop_ -= argCount + 1;
   push(objValue((Obj*)task));
 
-  // From here on more than one thread runs Red code, which is what
-  // turns on the guards around everything shared. It is set before the
-  // thread starts and never cleared.
+  // Under the scheduler a task is a fiber: a mapped stack and a queue
+  // push, rather than a thread. That is the whole reason a program can
+  // have a hundred thousand of them.
+  if (Scheduler::active() &&
+      Scheduler::instance().spawn(runtime_, task)) {
+    return true;
+  }
+
+  // Outside it -- the REPL, the debugger, the test runner -- a task is
+  // still an operating system thread. From here on more than one thread
+  // runs Red code, which is what turns on the guards around everything
+  // shared. It is set before the thread starts and never cleared.
   Runtime::becomeParallel();
   // The entry is made here rather than over there, so that a collection
   // cannot begin in the gap before the new thread has registered.
