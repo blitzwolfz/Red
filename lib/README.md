@@ -7,10 +7,12 @@ directory is on the library search path whenever `red` is run from
 | File | What it is |
 |---|---|
 | [`cli.red`](cli.red) | Command line parsing: flags, options, `--`, and a usage message. |
+| [`json.red`](json.red) | JSON, read and written, with sorted keys and an indented form. |
 | [`crc32.red`](crc32.red) | CRC-32. Written in Red, with a C++ half in [`../ffi/crc32_ext.cpp`](../ffi/crc32_ext.cpp) that it uses when it is built. |
 
 ```red
 import "cli.red" as cli;
+import "json.red" as json;
 import "crc32.red" as crc32;
 ```
 

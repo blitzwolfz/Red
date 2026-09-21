@@ -10,6 +10,7 @@ Worked examples live in [`lib/`](../lib):
 | Library | Written in |
 |---|---|
 | [`lib/cli.red`](../lib/cli.red) | Red. Command line parsing. |
+| [`lib/json.red`](../lib/json.red) | Red. JSON, read and written. |
 | [`lib/crc32.red`](../lib/crc32.red) | Red, with a C++ half in [`ffi/crc32_ext.cpp`](../ffi/crc32_ext.cpp). |
 
 [`examples/library_tour.red`](../examples/library_tour.red) uses both.
