@@ -1,6 +1,9 @@
 // Registration points for everything the runtime provides to Red code.
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include "../object.h"
 #include "../runtime.h"
 
@@ -39,8 +42,20 @@ std::string findLegacyJar();
 // the jar cannot be found.
 std::string legacyCommand(const std::string& scriptPath, bool captureOutput);
 
-// Path of the running interpreter, used to find the bundled legacy jar.
+// Path of the running interpreter, used to find the bundled legacy jar
+// and the library directory that ships beside it.
 void setExecutablePath(const std::string& path);
 const std::string& executablePath();
+
+// Directories searched for a library that is not next to the file asking
+// for it: every entry of RED_PATH, then lib/red and lib beside the
+// interpreter's own directory. Used by `import` and by ffi_open().
+// docs/libraries.md describes the order.
+std::vector<std::string> librarySearchPaths();
+
+// Finds `request` on the library search path. Returns an empty string
+// when nothing matches. An absolute request is returned unchanged if it
+// exists.
+std::string findOnLibraryPath(const std::string& request);
 
 }  // namespace red

@@ -18,12 +18,27 @@ Value nativeFfiOpen(VM& vm, int, Value* args) {
                    valueTypeName(args[0]));
   }
   ObjString* path = asString(args[0]);
-  void* handle = ::dlopen(std::string(path->chars, path->length).c_str(),
-                          RTLD_NOW | RTLD_LOCAL);
+  std::string request(path->chars, path->length);
+
+  // A bare name such as "mathx.so" is looked for on the library search
+  // path, the same one `import` uses, so an extension that ships with a
+  // Red library is reachable without knowing where it was installed. A
+  // name with a slash in it is used exactly as written.
+  std::string resolved = request;
+  if (request.find('/') == std::string::npos) {
+    std::string found = findOnLibraryPath(request);
+    if (!found.empty()) resolved = found;
+  }
+
+  void* handle = ::dlopen(resolved.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (handle == nullptr) {
     return vm.failAs("ffi", "ffi_open() failed: %s", ::dlerror());
   }
-  return objValue((Obj*)vm.runtime().newNativeLib(handle, path));
+  // Rooted before newNativeLib allocates: the interner does not keep a
+  // string alive on its own.
+  ObjString* resolvedPath = vm.runtime().internString(resolved);
+  GCRoot pathRoot(vm.runtime(), (Obj*)resolvedPath);
+  return objValue((Obj*)vm.runtime().newNativeLib(handle, resolvedPath));
 }
 
 Value libSym(VM& vm, int argCount, Value* args) {

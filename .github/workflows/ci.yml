@@ -63,8 +63,17 @@ jobs:
           ./build/red examples/word_count.red
           ./build/red examples/legacy_bridge.red
           ./build/red examples/mini_compiler.red
+          ./build/red examples/library_tour.red --loud ada grace
           ./build/red compile examples/tour.red -o /tmp/tour.redc
           ./build/red /tmp/tour.redc
+
+      # A library found on the search path, and the same library compiled
+      # ahead of time and imported as a .redc.
+      - name: Libraries
+        run: |
+          ./build/red compile lib/crc32.red -o build/crc32.redc
+          printf 'import "crc32.redc" as c;\nprint(c.of("hello"));\n' > /tmp/lib.red
+          ./build/red /tmp/lib.red
 
       - name: Disassembler
         run: ./build/red disasm examples/tiny.red

@@ -6,6 +6,7 @@
 
 #include "compiler.h"
 #include "debug.h"
+#include "serialize.h"
 #include "stdlib/builtins.h"
 #include "util.h"
 
@@ -592,27 +593,12 @@ bool VM::importModule(ObjString* path) {
   std::string resolved = absolutePath(joinPath(base, request));
 
   // A path that is not next to the importing file is looked for on the
-  // search path, so a shared library of Red code does not have to be
-  // reached with a chain of "..".
-  if (!fileExists(resolved) && request.front() != '/') {
-    const char* searchPath = std::getenv("RED_PATH");
-    if (searchPath != nullptr) {
-      std::string entries(searchPath);
-      size_t start = 0;
-      while (start <= entries.size()) {
-        size_t end = entries.find(':', start);
-        if (end == std::string::npos) end = entries.size();
-        std::string directory = entries.substr(start, end - start);
-        if (!directory.empty()) {
-          std::string candidate = absolutePath(joinPath(directory, request));
-          if (fileExists(candidate)) {
-            resolved = candidate;
-            break;
-          }
-        }
-        start = end + 1;
-      }
-    }
+  // library search path, so a shared library of Red code does not have to
+  // be reached with a chain of "..". docs/libraries.md describes the
+  // order.
+  if (!fileExists(resolved) && !request.empty() && request.front() != '/') {
+    std::string found = findOnLibraryPath(request);
+    if (!found.empty()) resolved = found;
   }
   ObjString* key = runtime_.internString(resolved);
   // Rooted for the whole function: the interner is weak, and everything
@@ -643,11 +629,25 @@ bool VM::importModule(ObjString* path) {
   GCRoot moduleRoot(runtime_, (Obj*)module);
   runtime_.modules.set(key, objValue((Obj*)module));
 
-  ObjFunction* function = compile(runtime_, source, module);
-  if (function == nullptr) {
-    runtime_.modules.remove(key);
-    return runtimeErrorAs("import", "Module '%s' failed to compile.",
-                          resolved.c_str());
+  // A module may be compiled ahead of time, the same as a program. That
+  // is worth doing for a large library that many programs import, because
+  // loading a chunk skips the compiler entirely.
+  ObjFunction* function;
+  if (looksCompiled(source)) {
+    std::string reason;
+    function = readCompiled(runtime_, source, module, &reason);
+    if (function == nullptr) {
+      runtime_.modules.remove(key);
+      return runtimeErrorAs("import", "Cannot load module '%s': %s",
+                            resolved.c_str(), reason.c_str());
+    }
+  } else {
+    function = compile(runtime_, source, module);
+    if (function == nullptr) {
+      runtime_.modules.remove(key);
+      return runtimeErrorAs("import", "Module '%s' failed to compile.",
+                            resolved.c_str());
+    }
   }
 
   // callAndRun expects the callee to be on the stack already, the same

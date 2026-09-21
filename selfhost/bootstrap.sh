@@ -79,7 +79,7 @@ while IFS= read -r file; do
     differ=$((differ + 1))
     echo "differs: $file" >&2
   fi
-done < <(find tests examples bench selfhost legacy -name '*.red' | sort)
+done < <(find tests examples bench selfhost legacy lib -name '*.red' | sort)
 echo "$same identical, $differ different"
 [ "$differ" -eq 0 ] || exit 1
 

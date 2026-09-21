@@ -106,10 +106,22 @@ end of the file are different.
 | `set_env(name, value)` | Sets one. |
 | `exit(code)` | Stops the program at once. Code defaults to 0. |
 | `cwd()` | The working directory. |
+| `source_path()` | Path of the file this call is written in. |
+| `source_dir()` | The directory that file is in. |
+| `library_paths()` | Where `import` and `ffi_open` look for a name. |
 | `platform()` | `"darwin"`, `"linux"` or `"unknown"`. |
 | `cpu_count()` | Number of processors. |
 | `time()` | Seconds since the epoch, with a fraction. |
 | `clock()` | Processor time used, in seconds. Use this for timing. |
+
+`source_dir()` is how a library reaches a file that ships with it. It
+answers for the file the call is written in, not for the program that
+imported it, so it keeps working whatever directory the program was
+started from.
+
+```red
+const words = read_file(source_dir() + "/words.txt");
+```
 
 ## Memory
 
@@ -185,13 +197,19 @@ keep running.
 Library methods: `sym(name)` gives a callable, `close()` unloads it.
 
 ```red
-const lib = ffi_open("./example_ext.so");
+const lib = ffi_open("example_ext.so");
 const hypot = lib.sym("ext_hypot");
 print(hypot(3, 4));      // 5
 ```
 
-[`ffi/red_ffi.h`](../ffi/red_ffi.h) defines what an extension has to
-export, and [`ffi/example_ext.c`](../ffi/example_ext.c) is a working one.
+A name with no `/` in it is looked for on the same search path as
+`import`; a name with one is used exactly as written. A missing file
+raises an error with kind `"ffi"`, which is what lets a library treat its
+native half as optional.
+
+[`ffi/red_ffi.h`](../ffi/red_ffi.h) is the contract in C and
+[`ffi/red_ffi.hpp`](../ffi/red_ffi.hpp) is a header-only layer over it for
+C++. [docs/libraries.md](libraries.md) walks through writing one.
 
 ## Running v1 programs
 

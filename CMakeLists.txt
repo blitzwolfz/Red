@@ -72,18 +72,16 @@ else()
 endif()
 
 # ---------------------------------------------------------------------
-# Example FFI extension, built so that the test suite can load it.
-add_library(red_example_ext MODULE ffi/example_ext.c)
-set_target_properties(red_example_ext PROPERTIES
-  PREFIX ""
-  OUTPUT_NAME "example_ext"
-  C_STANDARD 11
-)
-target_include_directories(red_example_ext PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ffi)
-if(APPLE)
-  # The helper functions live in the red binary, not in this module.
-  target_link_options(red_example_ext PRIVATE -undefined dynamic_lookup)
-endif()
+# Extensions. red_add_extension() is the same helper another project
+# would include to build one of its own; see docs/libraries.md.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/RedExtension.cmake)
+
+# The minimal extension, in C. The test suite loads it.
+red_add_extension(example_ext ffi/example_ext.c)
+set_target_properties(example_ext PROPERTIES C_STANDARD 11)
+
+# The native half of lib/crc32.red, in C++.
+red_add_extension(crc32_ext ffi/crc32_ext.cpp)
 
 enable_testing()
 find_package(Python3 COMPONENTS Interpreter)

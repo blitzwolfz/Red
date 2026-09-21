@@ -6,6 +6,7 @@
 #include <ctime>
 #include <thread>
 
+#include "../util.h"
 #include "../vm.h"
 #include "builtins.h"
 
@@ -71,6 +72,35 @@ Value nativeCwd(VM& vm, int, Value*) {
   return objValue((Obj*)vm.runtime().internString(buffer));
 }
 
+// Where the calling file lives. A library uses these to reach a data file
+// or an extension that sits beside it, whatever directory the program
+// that imported it was started from.
+Value nativeSourcePath(VM& vm, int, Value*) {
+  ObjModule* module = vm.currentModule();
+  if (module == nullptr) return nilValue();
+  return objValue((Obj*)module->path);
+}
+
+Value nativeSourceDir(VM& vm, int, Value*) {
+  ObjModule* module = vm.currentModule();
+  if (module == nullptr) return nilValue();
+  std::string directory =
+      directoryOf(std::string(module->path->chars, module->path->length));
+  return objValue((Obj*)vm.runtime().internString(directory));
+}
+
+// The directories `import` and ffi_open() search when a name is not found
+// beside the file asking for it.
+Value nativeLibraryPaths(VM& vm, int, Value*) {
+  ObjArray* array = vm.runtime().newArray();
+  GCRoot arrayRoot(vm.runtime(), (Obj*)array);
+  for (const std::string& directory : librarySearchPaths()) {
+    array->items.push_back(
+        objValue((Obj*)vm.runtime().internString(directory)));
+  }
+  return objValue((Obj*)array);
+}
+
 Value nativeExists(VM& vm, int, Value* args) {
   if (!isString(args[0])) {
     return vm.fail("exists() expects a string, got %s.", valueTypeName(args[0]));
@@ -124,6 +154,9 @@ void installOS(Runtime& runtime) {
   defineGlobalFn(runtime, "exit", nativeExit, -1);
   defineGlobalFn(runtime, "time", nativeTime, 0);
   defineGlobalFn(runtime, "cwd", nativeCwd, 0);
+  defineGlobalFn(runtime, "source_path", nativeSourcePath, 0);
+  defineGlobalFn(runtime, "source_dir", nativeSourceDir, 0);
+  defineGlobalFn(runtime, "library_paths", nativeLibraryPaths, 0);
   defineGlobalFn(runtime, "exists", nativeExists, 1);
   defineGlobalFn(runtime, "platform", nativePlatform, 0);
   defineGlobalFn(runtime, "cpu_count", nativeCpuCount, 0);
