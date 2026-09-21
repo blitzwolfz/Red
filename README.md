@@ -4,6 +4,8 @@ A small programming language with a bytecode compiler, a stack virtual
 machine, a mark and sweep garbage collector, and tasks with channels.
 Written in C++20, with no third-party dependencies.
 
+The compiler is also written in Red, and it reproduces itself.
+
 ```red
 fun worker(jobs, results) {
   for (;;) {
@@ -22,111 +24,32 @@ jobs.close();
 task.join();
 ```
 
-## Numbers
-
-Measured on an Apple M3, against CPython 3.14. Each program is run three
-times and the fastest run is reported. Both versions of each benchmark do
-the same work and their output is compared. Reproduce with
-`python3 bench/compare.py --red build/red --markdown`.
-
-| benchmark | what it measures | red | python | ratio |
-|---|---|--:|--:|--:|
-| fib | recursive calls, no allocation | 0.20s | 0.16s | 1.24x |
-| loop | tight arithmetic loop | 1.06s | 0.90s | 1.18x |
-| string | building and inspecting short strings | 0.64s | 0.11s | 5.61x |
-| alloc | allocation churn, collector bound | 0.43s | 0.29s | 1.45x |
-| method | method dispatch through inheritance | 0.43s | 0.51s | 0.85x |
-
-A ratio below 1.00 means Red was faster.
-
-Red is in the same range as CPython on calls, loops and allocation, and
-faster on method dispatch. It is about five times slower on string work,
-because every string is interned. That is a known cost of the current
-design and it is explained in [docs/design.md](docs/design.md#value-layout).
-
-## Build
-
-Needs CMake 3.16 or newer and a compiler with C++20. A JDK is optional,
-and only used to build the v1 interpreter.
+## Start here
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
+./setup.sh
 ```
+
+That checks what is installed, builds the interpreter into `build/red`,
+and runs the test suite. It needs CMake 3.16 or newer and a compiler with
+C++20; Python 3 runs the tests, and a JDK is optional and used only for
+the v1 interpreter. `./setup.sh --help` lists the rest, including
+`--install PREFIX`.
 
 Then:
 
 ```bash
-./build/red examples/tour.red
-./build/red bench
-./build/red repl
+./build/red examples/tour.red       # every part of the language
+./build/red repl                    # an interactive prompt
+./build/red bench                   # the benchmark programs
 ```
 
-Compile ahead of time, then run without the compiler:
-
-```bash
-./build/red compile examples/tour.red
-./build/red examples/tour.redc
-```
-
-On a four thousand function program that is 41ms of start-up down to
-4.4ms. The compiled file is versioned and checked on load, and is
-smaller than the source for ordinary code.
-
-Run the test suite:
-
-```bash
-python3 tests/run.py --red build/red --tests tests
-python3 tests/run.py --red build/red --tests tests --gc-stress
-python3 tests/run.py --red build/red --tests tests --compiled
-```
-
-## Architecture
-
-```
-  source                                       ┌──────────────────┐
-    │                                          │     Runtime      │
-    ▼                                          │                  │
-┌─────────┐   tokens   ┌──────────┐            │  heap            │
-│ Scanner │ ─────────► │ Compiler │            │  string interner │
-└─────────┘            └──────────┘            │  module cache    │
-                            │                  │  collector       │
-                            │ bytecode         │  one lock        │
-                            ▼                  └──────────────────┘
-                       ┌──────────┐                 ▲    ▲    ▲
-                       │  Chunk   │                 │    │    │
-                       │ code     │            ┌────┘    │    └────┐
-                       │ constants│            │         │         │
-                       │ lines    │        ┌───┴──┐  ┌───┴──┐  ┌───┴──┐
-                       └──────────┘        │  VM  │  │  VM  │  │  VM  │
-                            │              │ task │  │ task │  │ task │
-                            └─────────────►│      │  │      │  │      │
-                                           │stack │  │stack │  │stack │
-                                           │frames│  │frames│  │frames│
-                                           └──────┘  └──────┘  └──────┘
-```
-
-There is no syntax tree. The compiler reads one token at a time and emits
-bytecode directly.
-
-One `Runtime` per process holds the heap. One `VM` per task holds a value
-stack and call frames. A task holds the runtime lock while it runs
-bytecode, and releases it before anything that waits. The collector runs
-only while that lock is held, so any task that is not holding it has a
-stack that is not moving and can be scanned safely.
-
-| Where | What |
+| If you want to | Read |
 |---|---|
-| [`src/scanner.cpp`](src/scanner.cpp) | Tokens, including string interpolation. |
-| [`src/compiler.cpp`](src/compiler.cpp) | Single pass, Pratt expressions, emits bytecode. |
-| [`src/vm.cpp`](src/vm.cpp) | The dispatch loop, calls, closures, unwinding. |
-| [`src/runtime.cpp`](src/runtime.cpp) | Allocation and the collector. |
-| [`src/value.h`](src/value.h), [`src/object.h`](src/object.h) | Value layout and heap types. |
-| [`src/table.cpp`](src/table.cpp) | Hash tables for globals, fields and maps. |
-| [`src/debug.cpp`](src/debug.cpp) | The disassembler, shared with `--trace`. |
-| [`src/stdlib/`](src/stdlib) | Built-in functions and methods. |
-| [`selfhost/redc.red`](selfhost/redc.red) | The same compiler, written in Red. |
-| [`legacy/`](legacy) | The v1 interpreter, in Java, still working. |
+| Write a program | [docs/guide.md](docs/guide.md), which builds one from nothing |
+| Look something up | [docs/language.md](docs/language.md), [docs/stdlib.md](docs/stdlib.md) |
+| Write a library, in Red or C++ | [docs/libraries.md](docs/libraries.md) |
+| Understand the implementation | [docs/design.md](docs/design.md) |
 
 ## The language
 
@@ -236,18 +159,161 @@ $ red disasm examples/tiny.red
 0005    | RETURN
 ```
 
-## Extensions
+Compiling ahead of time removes start-up, not run time:
 
-Red loads shared libraries and calls into them.
-
-```red
-const lib = ffi_open("./example_ext.so");
-const hypot = lib.sym("ext_hypot");
-print(hypot(3, 4));      // 5
+```bash
+red compile examples/tour.red
+red examples/tour.redc
 ```
 
-[`ffi/red_ffi.h`](ffi/red_ffi.h) is the contract.
-[`ffi/example_ext.c`](ffi/example_ext.c) is a working extension.
+On a four thousand function program that is 41ms of start-up down to
+4.4ms. The compiled file is versioned and checked on load, and is smaller
+than the source for ordinary code.
+
+Run the test suite:
+
+```bash
+python3 tests/run.py --red build/red --tests tests
+python3 tests/run.py --red build/red --tests tests --gc-stress
+python3 tests/run.py --red build/red --tests tests --compiled
+```
+
+## Libraries
+
+A library is a file of Red that other programs import. `import` looks
+next to the importing file, then on `RED_PATH`, then in the directories
+that ship with the interpreter, so a library installed once is reachable
+by bare name.
+
+```red
+import "cli.red" as cli;
+```
+
+When part of a library needs to be fast, or needs something the standard
+library does not cover, that part can be written in C or C++ and loaded
+as an extension.
+
+```cpp
+#include "red_ffi.hpp"
+
+RED_FUNCTION(mathx_hypot) {
+  double a, b;
+  if (!args.number(0, &a) || !args.number(1, &b)) {
+    return ctx.fail("hypot() expects two numbers");
+  }
+  return red::ext::number(std::hypot(a, b));
+}
+```
+
+```red
+const lib = ffi_open("mathx.so");
+print(lib.sym("mathx_hypot")(3, 4));      // 5
+```
+
+[`lib/cli.red`](lib/cli.red) is a library written entirely in Red.
+[`lib/crc32.red`](lib/crc32.red) is one with both halves: Red that works
+on its own, and a C++ extension it uses when one is installed.
+[docs/libraries.md](docs/libraries.md) covers writing either.
+
+## The compiler, in Red
+
+[`selfhost/redc.red`](selfhost/redc.red) is a compiler for Red, written
+in Red. It emits the same bytecode and writes the same `.redc` files as
+the C++ compiler.
+
+```bash
+$ selfhost/bootstrap.sh
+B and C are identical. The compiler reproduces itself.
+A and B are identical too: the two compilers agree byte for byte.
+50 identical, 0 different
+31/31 tests passed (compiled by the self-hosted compiler)
+```
+
+The first line is the classic test: compile the Red compiler with the C++
+one, then with itself twice, and the last two results must match. The
+second is stronger — the two compilers produce the same bytes for every
+Red program in the repository. The third compiles each of those with both
+and compares; the fourth runs the whole conformance suite on bytecode the
+Red compiler produced.
+
+It compiles itself, 2,800 lines, in about 80ms. The C++ compiler does the
+same file in 3.6ms, so the Red one is roughly twenty times slower, which
+is about what an interpreted compiler costs and fast enough that the
+three stage bootstrap finishes in under a second.
+[docs/bootstrapping.md](docs/bootstrapping.md) has the plan this
+finished, and what removing the rest of the C++ would mean.
+
+## Numbers
+
+Measured on an Apple M3, against CPython 3.14. Each program is run three
+times and the fastest run is reported. Both versions of each benchmark do
+the same work and their output is compared. Reproduce with
+`python3 bench/compare.py --red build/red --markdown`.
+
+| benchmark | what it measures | red | python | ratio |
+|---|---|--:|--:|--:|
+| fib | recursive calls, no allocation | 0.20s | 0.16s | 1.24x |
+| loop | tight arithmetic loop | 1.06s | 0.90s | 1.18x |
+| string | building and inspecting short strings | 0.64s | 0.11s | 5.61x |
+| alloc | allocation churn, collector bound | 0.43s | 0.29s | 1.45x |
+| method | method dispatch through inheritance | 0.43s | 0.51s | 0.85x |
+
+A ratio below 1.00 means Red was faster.
+
+Red is in the same range as CPython on calls, loops and allocation, and
+faster on method dispatch. It is about five times slower on string work,
+because every string is interned. That is a known cost of the current
+design and it is explained in [docs/design.md](docs/design.md#value-layout).
+
+## Architecture
+
+```
+  source                                       ┌──────────────────┐
+    │                                          │     Runtime      │
+    ▼                                          │                  │
+┌─────────┐   tokens   ┌──────────┐            │  heap            │
+│ Scanner │ ─────────► │ Compiler │            │  string interner │
+└─────────┘            └──────────┘            │  module cache    │
+                            │                  │  collector       │
+                            │ bytecode         │  one lock        │
+                            ▼                  └──────────────────┘
+                       ┌──────────┐                 ▲    ▲    ▲
+                       │  Chunk   │                 │    │    │
+                       │ code     │            ┌────┘    │    └────┐
+                       │ constants│            │         │         │
+                       │ lines    │        ┌───┴──┐  ┌───┴──┐  ┌───┴──┐
+                       └──────────┘        │  VM  │  │  VM  │  │  VM  │
+                            │              │ task │  │ task │  │ task │
+                            └─────────────►│      │  │      │  │      │
+                                           │stack │  │stack │  │stack │
+                                           │frames│  │frames│  │frames│
+                                           └──────┘  └──────┘  └──────┘
+```
+
+There is no syntax tree. The compiler reads one token at a time and emits
+bytecode directly.
+
+One `Runtime` per process holds the heap. One `VM` per task holds a value
+stack and call frames. A task holds the runtime lock while it runs
+bytecode, and releases it before anything that waits. The collector runs
+only while that lock is held, so any task that is not holding it has a
+stack that is not moving and can be scanned safely.
+
+| Where | What |
+|---|---|
+| [`src/scanner.cpp`](src/scanner.cpp) | Tokens, including string interpolation. |
+| [`src/compiler.cpp`](src/compiler.cpp) | Single pass, Pratt expressions, emits bytecode. |
+| [`src/serialize.cpp`](src/serialize.cpp) | Reading and writing `.redc` files. |
+| [`src/vm.cpp`](src/vm.cpp) | The dispatch loop, calls, closures, unwinding. |
+| [`src/runtime.cpp`](src/runtime.cpp) | Allocation and the collector. |
+| [`src/value.h`](src/value.h), [`src/object.h`](src/object.h) | Value layout and heap types. |
+| [`src/table.cpp`](src/table.cpp) | Hash tables for globals, fields and maps. |
+| [`src/debug.cpp`](src/debug.cpp) | The disassembler, shared with `--trace`. |
+| [`src/stdlib/`](src/stdlib) | Built-in functions and methods. |
+| [`selfhost/redc.red`](selfhost/redc.red) | The same scanner, compiler and writer, in Red. |
+| [`lib/`](lib) | Libraries that ship with the interpreter. |
+| [`ffi/`](ffi) | The extension contract, in C and C++. |
+| [`legacy/`](legacy) | The v1 interpreter, in Java, still working. |
 
 ## Running v1 code
 
@@ -269,6 +335,8 @@ print(output.split("\n").len());
 | File | What it shows |
 |---|---|
 | [`examples/tour.red`](examples/tour.red) | Every part of the language. |
+| [`examples/logstat/`](examples/logstat) | A whole program: arguments, modules, files, tasks, tests. |
+| [`examples/library_tour.red`](examples/library_tour.red) | Using libraries, in Red and in C++. |
 | [`examples/echo_server.red`](examples/echo_server.red) | A concurrent TCP echo server, with clients. |
 | [`examples/word_count.red`](examples/word_count.red) | Parallel word count over a file. |
 | [`examples/legacy_bridge.red`](examples/legacy_bridge.red) | Calling v1 from v2. |
@@ -278,22 +346,33 @@ print(output.split("\n").len());
 
 | File | Contents |
 |---|---|
-| [docs/design.md](docs/design.md) | Why it is built this way, and what was rejected. |
+| [docs/guide.md](docs/guide.md) | Writing a whole program, start to finish. |
 | [docs/language.md](docs/language.md) | Language reference and grammar. |
-| [docs/bytecode.md](docs/bytecode.md) | The instruction set. |
 | [docs/stdlib.md](docs/stdlib.md) | Built-in functions and methods. |
+| [docs/libraries.md](docs/libraries.md) | Writing a library, in Red or in C++. |
+| [docs/design.md](docs/design.md) | Why it is built this way, and what was rejected. |
+| [docs/bytecode.md](docs/bytecode.md) | The instruction set and the compiled file format. |
 | [docs/bootstrapping.md](docs/bootstrapping.md) | How the C++ dependency is being removed. |
 | [selfhost/README.md](selfhost/README.md) | The compiler written in Red, and how to bootstrap it. |
 
 ## Known limits
 
 - Two tasks do not compute at the same time. One lock guards the heap.
+  What tasks buy is waiting in parallel, not computing in parallel.
   [Why](docs/design.md#concurrency).
 - The collector stops the world and does not move objects.
 - Type annotations are parsed and ignored.
 - Code that makes many distinct strings is slow, because every string is
   interned. Reusing a small vocabulary is fast.
 - A task that is never joined is kept alive until the program ends.
+- An error thrown inside a task reaches `join()` as kind `"task"` with
+  the original message wrapped, so the kind and payload do not survive
+  the boundary. Return failure as a value instead:
+  [guide.md](docs/guide.md#8-doing-it-in-parallel).
+- The virtual machine, the collector and the standard library are still
+  C++. Only the compiler is self-hosted.
+- There is no package manager. A library is installed by copying it onto
+  the search path.
 
 ## Licence
 

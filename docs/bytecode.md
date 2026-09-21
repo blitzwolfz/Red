@@ -1,18 +1,33 @@
 # Bytecode
 
 Red compiles to a flat stream of bytes. This file describes that stream.
-It is the contract between the compiler and the virtual machine, and it is
-what a future self-hosted compiler would target. See
-[bootstrapping.md](bootstrapping.md).
 
-Format version: **3**. Version 3 added the catch filter and destructuring
-instructions. Version 2 added duplication, bitwise, iteration and default
-arguments. New opcodes are always added at the end of the list, so the
-numbering of the older ones never moves. Version 2 added the duplication, bitwise,
-iteration and default argument instructions listed below. They were added
-at the end of the opcode list, so the numbering of the originals did not
-move. The version in `src/common.h` changes whenever the
-layout below changes in a way that breaks old code.
+It is the contract between the compiler and the virtual machine, and
+there are two compilers: the C++ one in [`src/`](../src) and the Red one
+in [`selfhost/redc.red`](../selfhost/redc.red). They agree byte for byte,
+and this file is why. Anything written here is the format; anything not
+written here is an implementation detail neither of them may rely on.
+
+## Versions
+
+Format version **3**.
+
+| Version | Added |
+|---|---|
+| 3 | The catch filter and destructuring instructions. |
+| 2 | Duplication, bitwise, iteration and default argument instructions. |
+| 1 | The original set. |
+
+New opcodes go at the end of the list, so the numbering of the older ones
+never moves. The numbering *is* the format.
+
+Changing the version means changing three things together:
+`kBytecodeVersion` in [`src/common.h`](../src/common.h),
+`BYTECODE_VERSION` in [`selfhost/redc.red`](../selfhost/redc.red), and
+the table above. A compiled file carries the version and is refused
+rather than misread by an interpreter that expects a different one.
+[bootstrapping.md](bootstrapping.md#what-to-protect-now) says why this
+matters more now than it did.
 
 ## Chunks
 

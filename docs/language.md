@@ -1,7 +1,11 @@
 # The Red language
 
-A reference for Red v2. For a program that uses most of this, read
-[`examples/tour.red`](../examples/tour.red).
+A reference for Red v2: every form in the language, and a grammar at the
+end.
+
+If you are starting out, [guide.md](guide.md) builds a whole program
+instead, and [`examples/tour.red`](../examples/tour.red) is one file that
+uses most of what is below.
 
 v2 is not source compatible with v1. The old syntax still runs, on the old
 interpreter. See [the legacy section](#running-v1-code).
@@ -662,17 +666,33 @@ call stack, and exits with code 70.
 Each file is a module. `import` loads one and binds it to a name.
 
 ```red
-import "util.red";             // binds util
+import "util.red";             // binds util, from the file stem
 import "util.red" as helpers;  // binds helpers
 print(util.double(21));
 ```
 
-Paths resolve against the importing file, not the working directory. A
-file is loaded once, however many times it is imported, and everything it
-defines at the top level is shared by every importer.
+Everything a module declares at its top level is visible to whoever
+imports it, and nothing else is. A file is loaded once, however many
+times it is imported, and its state is shared by every importer. Two
+modules may import each other: the second one to start sees the first in
+its partly built state rather than looping forever.
 
 Reading a name a module does not define raises an error. Module names
 cannot be assigned to from outside.
+
+A path resolves against the file doing the importing, not against the
+working directory, so a project can be moved or run from anywhere. A path
+that is not found there is looked for on the library search path, which
+is how `import "cli.red"` finds a library that ships with the
+interpreter. [libraries.md](libraries.md) describes the order, and
+`library_paths()` prints it.
+
+An import may name a compiled file, which loads a chunk instead of
+running the compiler:
+
+```red
+import "util.redc" as util;
+```
 
 ## Tasks and channels
 

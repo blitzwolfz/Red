@@ -139,6 +139,11 @@ A `string_view` from `args.string()` points into the interpreter's heap
 and stays valid until the next allocation. Copy it if it has to outlive
 the call.
 
+`ctx.fail()` raises an error with kind `"runtime"`, so a Red caller that
+wants to tell one extension failure from another has to read the message
+or check before calling. `ffi_open()` and `sym()` are the two that raise
+kind `"ffi"`.
+
 ### In C
 
 The same thing without the wrapper. `RedValue`, `red_is_number`,

@@ -172,8 +172,8 @@ run.
 $ selfhost/bootstrap.sh
 B and C are identical. The compiler reproduces itself.
 A and B are identical too: the two compilers agree byte for byte.
-42 identical, 0 different
-29/29 tests passed (compiled by the self-hosted compiler)
+50 identical, 0 different
+31/31 tests passed (compiled by the self-hosted compiler)
 ```
 
 **A** and **B** being identical is a stronger result than the one the
@@ -186,7 +186,11 @@ when it is compiled, so a compiler split across modules would still pull
 its own parts through the C++ compiler at start-up and the bootstrap would
 prove nothing about them.
 
-The compiler compiles itself in about 90ms.
+The compiler compiles itself, 2,800 lines, in about 80ms. The C++
+compiler does the same file in 3.6ms. Twenty times slower is about what
+an interpreted compiler costs, and it is fast enough that the whole three
+stage bootstrap finishes in under a second, which is what decides whether
+it runs in continuous integration.
 [`selfhost/README.md`](../selfhost/README.md) covers the parts of the port
 that needed thought, chiefly writing a double without being able to look
 at its bits.

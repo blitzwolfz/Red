@@ -35,6 +35,9 @@ run. Today all three pass, and so does the stronger claim that A and B are
 identical too: the C++ compiler and the Red compiler produce the same
 bytes for every input in the repository.
 
+It compiles itself, 2,800 lines, in about 80ms; the C++ compiler does the
+same file in 3.6ms.
+
 To run just the suite against the self-hosted compiler:
 
 ```bash
