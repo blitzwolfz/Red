@@ -294,10 +294,18 @@ inline bool isEnum(Value v) { return isObjType(v, ObjType::Enum); }
 inline bool isEnumMember(Value v) { return isObjType(v, ObjType::EnumMember); }
 inline bool isError(Value v) { return isObjType(v, ObjType::Error); }
 
-// Values allowed as map keys. Everything here either compares by value or
-// is a unique object that never changes.
+// Values allowed as map keys. A number, a bool, nil, a string or an enum
+// member compares by value. An instance compares by identity: two
+// separately built objects with the same fields are two keys, the same
+// way they are two objects. A class that wants its instances to key by
+// value gives them a method that returns a string or a number, and the
+// program uses that as the key.
+//
+// An array, a map or a set is not a key. They can be changed after they
+// are used as one, which would leave the entry somewhere the table can
+// no longer find it.
 inline bool isHashableKey(Value v) {
-  return !isObj(v) || isString(v) || isEnumMember(v);
+  return !isObj(v) || isString(v) || isEnumMember(v) || isInstance(v);
 }
 
 std::string objectToString(Obj* obj, bool quoteStrings);

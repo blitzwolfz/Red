@@ -70,6 +70,10 @@ void defineGlobalFn(Runtime& runtime, const char* name, NativeFn fn,
   runtime.builtins.set(runtime.internString(name), objValue((Obj*)native));
 }
 
+void defineGlobalValue(Runtime& runtime, const char* name, Value value) {
+  runtime.builtins.set(runtime.internString(name), value);
+}
+
 void defineMethodFn(Runtime& runtime, ObjType type, const char* name,
                     NativeFn fn, int arity) {
   ObjNative* native = runtime.newNative(fn, name, arity);

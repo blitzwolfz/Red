@@ -42,3 +42,11 @@ try {
 } catch (e) {
   print(e.message);              // expect: Bitwise operators need two numbers, got string and number.
 }
+
+// Hex literals, which is how a mask or a byte value is usually written.
+print(0xff, 0x10, 0x0, 0xABCDEF);         // expect: 255 16 0 11259375
+print(0xDEADBEEF);                        // expect: 3735928559
+print(0xff & 0x0f, 0xf0 | 0x0f);          // expect: 15 255
+print(0xff << 8 | 0x41);                  // expect: 65345
+print(0xffffffff | 0);                    // expect: -1
+print(0x10 == 16 and 0X10 == 16);         // expect: true

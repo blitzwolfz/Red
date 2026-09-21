@@ -64,6 +64,13 @@ Rule 1 is what makes a program's own files work: a relative import is
 relative to the importer, not to the directory the program was started
 from, so a project can be moved without editing its imports.
 
+It also means a file of your own shadows a library with the same name. A
+`cli.red` next to your program is the one that `import "cli.red"` finds,
+and `lib/cli.red` is never reached. That is the right way round — your
+files win — but it is worth knowing when an import suddenly resolves
+somewhere unexpected. `library_paths()` and the resolved path in the
+error message are how you find out.
+
 Rules 3 to 5 are worked out from where the `red` binary is. Running
 `build/red` in this repository, they come to `lib/red`, `lib` and `build`,
 which is why `import "cli.red"` finds `lib/cli.red` from anywhere. For an
@@ -258,7 +265,7 @@ mylib/
   mylib.red          the library
   mylib_ext.cpp      the native half, if it has one
   README.md
-  tests/mylib.red    a conformance test, in the shape tests/run.py expects
+  tests/mylib.red    a conformance test, in the shape `red test` expects
 ```
 
 ```bash

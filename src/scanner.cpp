@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <unordered_map>
 
+#include "util.h"
+
 namespace red {
 
 namespace {
@@ -11,6 +13,16 @@ bool isDigit(char c) { return c >= '0' && c <= '9'; }
 
 bool isAlpha(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+}
+
+bool isHexDigit(char c) {
+  return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+int hexValue(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return c - 'A' + 10;
 }
 
 const std::unordered_map<std::string, TokenType>& keywords() {
@@ -108,6 +120,19 @@ Token Scanner::errorToken(const std::string& message) const {
 }
 
 Token Scanner::number() {
+  // 0x1f. Written out as a double the same way every other literal is,
+  // so a hex literal past 2^53 loses its low bits like any other number
+  // that large rather than meaning something different.
+  if (source_[start_] == '0' && (peek() == 'x' || peek() == 'X') &&
+      isHexDigit(peekNext())) {
+    advance();
+    double value = 0;
+    while (isHexDigit(peek())) value = value * 16 + hexValue(advance());
+    Token token = make(TokenType::Number);
+    token.number = value;
+    return token;
+  }
+
   while (isDigit(peek())) advance();
   if (peek() == '.' && isDigit(peekNext())) {
     advance();
@@ -168,6 +193,35 @@ Token Scanner::resumeString() {
         case '\\': value += '\\'; break;
         case '"': value += '"'; break;
         case '$': value += '$'; break;
+        case 'u': {
+          // \u00e9 names a code point with four hex digits. \u{1f600}
+          // takes one to six, for the ones that do not fit in four.
+          uint32_t codePoint = 0;
+          int digits = 0;
+          bool braced = match('{');
+          int wanted = braced ? 6 : 4;
+          while (digits < wanted && isHexDigit(peek())) {
+            codePoint = codePoint * 16 + (uint32_t)hexValue(advance());
+            digits++;
+          }
+          if (digits == 0 || (!braced && digits < 4)) {
+            return errorToken(
+                "A '\\u' escape needs four hex digits, or braces around one "
+                "to six.");
+          }
+          if (braced && !match('}')) {
+            return errorToken("Expect '}' to close a '\\u' escape.");
+          }
+          char buffer[4];
+          size_t written = encodeUtf8(codePoint, buffer);
+          if (written == 0) {
+            return errorToken(
+                "A '\\u' escape must name a code point up to 10ffff, and not "
+                "half of a surrogate pair.");
+          }
+          value.append(buffer, written);
+          break;
+        }
         default:
           return errorToken(std::string("Unknown escape sequence '\\") +
                             escape + "'.");

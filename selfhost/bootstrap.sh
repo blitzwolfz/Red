@@ -84,7 +84,7 @@ echo "$same identical, $differ different"
 [ "$differ" -eq 0 ] || exit 1
 
 bar "the test suite, compiled by the self-hosted compiler"
-python3 tests/run.py --red "$RED" --tests tests --selfhost "$OUT/redc-b.redc"
+"$RED" test tests --compiler "$OUT/redc-b.redc"
 
 bar "done"
 echo "Stage 3 of docs/bootstrapping.md holds."

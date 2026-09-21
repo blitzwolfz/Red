@@ -31,3 +31,12 @@ print("a-b-a".replace("a", "X")); // expect: X-b-X
 print("ab".repeat(3));            // expect: ababab
 print("hello"[0]);                // expect: h
 print("hello"[-1]);               // expect: o
+
+// Trimming one end at a time, for the cases where the other end matters.
+print("[" + "  hi  ".trim() + "]");        // expect: [hi]
+print("[" + "  hi  ".trim_start() + "]");  // expect: [hi  ]
+print("[" + "  hi  ".trim_end() + "]");    // expect: [  hi]
+print("[" + "\t x".trim_start() + "]");    // expect: [x]
+print("[" + "x \t".trim_end() + "]");      // expect: [x]
+print("[" + "".trim_start() + "]");        // expect: []
+print("[" + "abc".trim_end() + "]");       // expect: [abc]

@@ -316,6 +316,106 @@ bool VM::callValue(Value callee, int argCount) {
                         valueTypeName(callee));
 }
 
+// ---------------------------------------------------------------------
+// the hooks a class may define
+
+Value VM::classHook(Value value, ObjString* name) {
+  if (!isInstance(value)) return nilValue();
+  Value method;
+  if (!asInstance(value)->klass->methods.get(name, &method)) return nilValue();
+  // Methods are always closures, but a hook is called from places that
+  // cannot report a failure, so the check is worth its one comparison.
+  if (!isClosure(method)) return nilValue();
+  return method;
+}
+
+std::string VM::stringifyAt(Value value, bool quoteStrings, int depth) {
+  // The same bound the plain printer uses. A container can hold itself,
+  // and a str() that prints its fields can reach one.
+  if (depth >= 8) return quoteStrings ? valueToDisplay(value) : valueToString(value);
+
+  Value hook = classHook(value, runtime_.strString);
+  if (!isNil(hook)) {
+    // The receiver goes in the callee slot, which is where a compiled
+    // call site leaves it and where the method reads `this` from.
+    push(value);
+    Value text = nilValue();
+    if (callAndRun(hook, 0, &text) != InterpretResult::Ok) {
+      // The error is already raised. Fall back rather than losing the
+      // line that was being printed.
+      return valueToString(value);
+    }
+    // Whatever str() returned is shown as itself. A str() that gives
+    // back something other than a string is a mistake, but printing it
+    // is more useful than refusing to.
+    if (isString(text)) {
+      // Never quoted, even inside a container: what str() gave back is
+      // the object's own written form, not a string it was holding.
+      return std::string(asString(text)->chars, asString(text)->length);
+    }
+    return stringifyAt(text, quoteStrings, depth + 1);
+  }
+
+  // Containers are walked here rather than in value.cpp so that an
+  // instance with a str() inside one goes through it.
+  if (isArray(value)) {
+    ObjArray* array = asArray(value);
+    std::string out = "[";
+    for (size_t i = 0; i < array->items.size(); i++) {
+      if (i > 0) out += ", ";
+      out += stringifyAt(array->items[i], true, depth + 1);
+    }
+    return out + "]";
+  }
+  if (isMap(value)) {
+    ObjMap* map = asMap(value);
+    std::string out = "{";
+    bool first = true;
+    for (const ValueEntry& slot : map->entries.slots()) {
+      if (!slot.used || slot.tombstone) continue;
+      if (!first) out += ", ";
+      first = false;
+      out += stringifyAt(slot.key, true, depth + 1);
+      out += ": ";
+      out += stringifyAt(slot.value, true, depth + 1);
+    }
+    return out + "}";
+  }
+  if (isSet(value)) {
+    ObjSet* set = asSet(value);
+    std::string out = "set(";
+    bool first = true;
+    for (const ValueEntry& slot : set->entries.slots()) {
+      if (!slot.used || slot.tombstone) continue;
+      if (!first) out += ", ";
+      first = false;
+      out += stringifyAt(slot.key, true, depth + 1);
+    }
+    return out + ")";
+  }
+
+  return quoteStrings ? valueToDisplay(value) : valueToString(value);
+}
+
+std::string VM::stringify(Value value) { return stringifyAt(value, false, 0); }
+
+std::string VM::display(Value value) { return stringifyAt(value, true, 0); }
+
+bool VM::equal(Value a, Value b) {
+  if (valuesEqual(a, b)) return true;
+
+  // eq() is asked only when the plain comparison already said no, so a
+  // value is always equal to itself whatever the method does.
+  Value hook = classHook(a, runtime_.eqString);
+  if (isNil(hook)) return false;
+
+  push(a);
+  push(b);
+  Value answer = nilValue();
+  if (callAndRun(hook, 1, &answer) != InterpretResult::Ok) return false;
+  return !isFalsey(answer);
+}
+
 bool VM::bindMethod(ObjClass* klass, ObjString* name) {
   Value method;
   if (!klass->methods.get(name, &method)) {
@@ -549,8 +649,8 @@ bool VM::setIndex() {
     if (!isHashableKey(indexValue)) {
       return runtimeErrorAs(
           "key",
-          "A map key must be a string, number, boolean, nil or enum member, "
-          "got %s.",
+          "A map key must be a string, number, boolean, nil, enum member "
+          "or instance, got %s.",
           valueTypeName(indexValue));
     }
     asMap(target)->entries.set(indexValue, value);
@@ -893,13 +993,13 @@ InterpretResult VM::run(int baseFrame) {
       case OP_EQUAL: {
         Value b = pop();
         Value a = pop();
-        push(boolValue(valuesEqual(a, b)));
+        push(boolValue(equal(a, b)));
         break;
       }
       case OP_NOT_EQUAL: {
         Value b = pop();
         Value a = pop();
-        push(boolValue(!valuesEqual(a, b)));
+        push(boolValue(!equal(a, b)));
         break;
       }
 
@@ -1022,7 +1122,9 @@ InterpretResult VM::run(int baseFrame) {
       }
 
       case OP_TO_STRING: {
-        ObjString* text = runtime_.internString(valueToString(peek(0)));
+        // Through stringify, so "${p}" goes via the class's own str()
+        // the same way print(p) does.
+        ObjString* text = runtime_.internString(stringify(peek(0)));
         pop();
         push(objValue((Obj*)text));
         break;
@@ -1143,7 +1245,7 @@ InterpretResult VM::run(int baseFrame) {
           map->entries.set(pair[0], pair[1]);
         }
         if (badKey) {
-          FAULT("A map key must be a string, number, boolean, nil or enum "
+          FAULT("A map key must be a string, number, boolean, nil, enum "
                 "member.")
         }
         stackTop_ -= count * 2;
@@ -1227,12 +1329,19 @@ InterpretResult VM::run(int baseFrame) {
           break;
         }
         if (isString(subject)) {
+          // Characters, not bytes, so a loop over text holds together
+          // for input that is not ASCII. bytes() is there for when the
+          // string is data rather than text.
           ObjString* text = asString(subject);
           ObjArray* characters = runtime_.newArray();
           GCRoot charactersRoot(runtime_, (Obj*)characters);
-          for (size_t i = 0; i < text->length; i++) {
+          size_t i = 0;
+          while (i < text->length) {
+            uint32_t codePoint;
+            size_t width = decodeUtf8(text->chars, text->length, i, &codePoint);
             characters->items.push_back(
-                objValue((Obj*)runtime_.copyString(text->chars + i, 1)));
+                objValue((Obj*)runtime_.copyString(text->chars + i, width)));
+            i += width;
           }
           pop();
           push(objValue((Obj*)characters));

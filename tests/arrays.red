@@ -59,3 +59,23 @@ print(same == same);                 // expect: true
 print([1, [2, 3]].equals([1, [2, 3]]));      // expect: true
 print([1, 2].equals([1, 2, 3]));             // expect: false
 print([1, 2] == [1, 2]);                     // expect: false
+
+// any, all and find stop at the first answer rather than walking the
+// whole array the way filter does.
+const numbers = [1, 4, 9, 16];
+print(numbers.any(fun (n) { return n > 10; }));       // expect: true
+print(numbers.any(fun (n) { return n > 100; }));      // expect: false
+print(numbers.all(fun (n) { return n > 0; }));        // expect: true
+print(numbers.all(fun (n) { return n > 1; }));        // expect: false
+print([].any(fun (n) { return true; }));              // expect: false
+print([].all(fun (n) { return false; }));             // expect: true
+
+print(numbers.find(fun (n) { return n > 5; }));       // expect: 9
+print(numbers.find(fun (n) { return n > 50; }));      // expect: nil
+print(numbers.find_index(fun (n) { return n > 5; })); // expect: 2
+print(numbers.find_index(fun (n) { return n > 50; }));// expect: -1
+
+// find_index is how a nil element is told apart from no match.
+const holes = [nil, 3];
+print(holes.find(fun (n) { return n == nil; }));      // expect: nil
+print(holes.find_index(fun (n) { return n == nil; }));// expect: 0

@@ -101,6 +101,96 @@ Value nativeLibraryPaths(VM& vm, int, Value*) {
   return objValue((Obj*)array);
 }
 
+// ---- dates ----------------------------------------------------------
+
+// Fills a broken down time from a number of seconds, local or UTC.
+bool splitTime(double seconds, bool utc, struct tm* out) {
+  std::time_t stamp = (std::time_t)seconds;
+  if (utc) return ::gmtime_r(&stamp, out) != nullptr;
+  return ::localtime_r(&stamp, out) != nullptr;
+}
+
+// date() for now, date(seconds) for a moment, date(seconds, true) for the
+// same moment in UTC. The month is 1 to 12 and the weekday is 0 for
+// Sunday, which is what every other part of the world's tooling uses.
+Value nativeDate(VM& vm, int argCount, Value* args) {
+  double seconds = (double)std::time(nullptr);
+  if (argCount > 0) {
+    if (!isNumber(args[0])) {
+      return vm.failAs("type", "date() expects a number of seconds, got %s.",
+                       valueTypeName(args[0]));
+    }
+    seconds = asNumber(args[0]);
+  }
+  bool utc = argCount > 1 && !isFalsey(args[1]);
+
+  struct tm parts;
+  if (!splitTime(seconds, utc, &parts)) {
+    return vm.fail("date() cannot represent %s.",
+                   valueToString(numberValue(seconds)).c_str());
+  }
+
+  Runtime& rt = vm.runtime();
+  ObjMap* map = rt.newMap();
+  GCRoot mapRoot(rt, (Obj*)map);
+
+  struct Field {
+    const char* name;
+    double value;
+  };
+  const Field fields[] = {
+      {"year", (double)parts.tm_year + 1900},
+      {"month", (double)parts.tm_mon + 1},
+      {"day", (double)parts.tm_mday},
+      {"hour", (double)parts.tm_hour},
+      {"minute", (double)parts.tm_min},
+      {"second", (double)parts.tm_sec},
+      {"weekday", (double)parts.tm_wday},
+      {"yearday", (double)parts.tm_yday + 1},
+  };
+  for (const Field& field : fields) {
+    ObjString* key = rt.internString(field.name);
+    GCRoot keyRoot(rt, (Obj*)key);
+    map->entries.set(objValue((Obj*)key), numberValue(field.value));
+  }
+  return objValue((Obj*)map);
+}
+
+// strftime, so the patterns are the ones already written down
+// everywhere: %Y-%m-%d, %H:%M:%S, %a, %B and the rest.
+Value nativeFormatTime(VM& vm, int argCount, Value* args) {
+  if (!isNumber(args[0])) {
+    return vm.failAs("type",
+                     "format_time() expects a number of seconds, got %s.",
+                     valueTypeName(args[0]));
+  }
+  if (!isString(args[1])) {
+    return vm.failAs("type", "format_time() expects a pattern string, got %s.",
+                     valueTypeName(args[1]));
+  }
+  bool utc = argCount > 2 && !isFalsey(args[2]);
+
+  struct tm parts;
+  if (!splitTime(asNumber(args[0]), utc, &parts)) {
+    return vm.fail("format_time() cannot represent %s.",
+                   valueToString(args[0]).c_str());
+  }
+
+  std::string pattern(asString(args[1])->chars, asString(args[1])->length);
+  // strftime reports 0 both for "did not fit" and for "produced nothing",
+  // so the buffer is grown until the result stops filling it exactly.
+  std::string out;
+  for (size_t size = 64; size <= 8192; size *= 4) {
+    out.assign(size, '\0');
+    size_t written = std::strftime(&out[0], size, pattern.c_str(), &parts);
+    if (written > 0 || pattern.empty()) {
+      out.resize(written);
+      return objValue((Obj*)vm.runtime().copyString(out.data(), out.size()));
+    }
+  }
+  return vm.fail("format_time() pattern produced more than 8192 characters.");
+}
+
 Value nativeExists(VM& vm, int, Value* args) {
   if (!isString(args[0])) {
     return vm.fail("exists() expects a string, got %s.", valueTypeName(args[0]));
@@ -153,6 +243,8 @@ void installOS(Runtime& runtime) {
   defineGlobalFn(runtime, "args", nativeArgs, 0);
   defineGlobalFn(runtime, "exit", nativeExit, -1);
   defineGlobalFn(runtime, "time", nativeTime, 0);
+  defineGlobalFn(runtime, "date", nativeDate, -1);
+  defineGlobalFn(runtime, "format_time", nativeFormatTime, -1);
   defineGlobalFn(runtime, "cwd", nativeCwd, 0);
   defineGlobalFn(runtime, "source_path", nativeSourcePath, 0);
   defineGlobalFn(runtime, "source_dir", nativeSourceDir, 0);

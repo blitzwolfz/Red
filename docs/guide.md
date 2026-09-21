@@ -336,7 +336,7 @@ print(parse.parse("nonsense") == nil);    // expect: true
 ```
 
 ```bash
-$ python3 tests/run.py --red build/red --tests examples/logstat/tests
+$ red test examples/logstat/tests
 ok   parse.red
 
 1/1 tests passed
@@ -358,10 +358,10 @@ Test the module, not the program. `parse.red` is where the decisions are;
 `logstat.red` moves values between it and the terminal, and testing that
 means testing `print`.
 
-Two flags are worth knowing.
+Three flags are worth knowing.
 
 ```bash
-python3 tests/run.py --red build/red --tests tests --gc-stress
+red test tests --gc-stress
 ```
 
 Collects before every allocation. It turns a collector bug from something
@@ -369,11 +369,18 @@ that happens rarely into something that happens on the first run. If your
 program uses an extension, run it this way at least once.
 
 ```bash
-python3 tests/run.py --red build/red --tests tests --compiled
+red test tests --compiled
 ```
 
 Compiles each test ahead of time and runs the result, which is worth
 doing before shipping anything compiled.
+
+```bash
+red test tests --filter parse
+```
+
+Only the tests whose name contains that text, for when you are working on
+one of them.
 
 ## 5. Reading files, and failing well
 
@@ -754,7 +761,7 @@ export RED_PATH=$HOME/red-libraries:/opt/red/lib
 
 Before you call it done:
 
-- `python3 tests/run.py --red build/red --tests your-project/tests`
+- `red test your-project/tests`
 - the same with `--gc-stress`, and again with `--compiled`
 - `program --help` prints something you would want to read
 - a bad argument exits 64 and a missing file exits something other than 0

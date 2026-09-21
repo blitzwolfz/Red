@@ -63,6 +63,18 @@ class VM {
   Runtime& runtime() { return runtime_; }
   ObjModule* currentModule();
 
+  // Turns a value into text the way print does. A class may define a
+  // str() method of its own, which is why this needs the VM and the
+  // plain valueToString() does not. Containers are walked, so a class
+  // with a str() prints through it inside an array too.
+  std::string stringify(Value value);
+  // The same, with strings quoted, as repr() shows them and as a
+  // container shows the values inside it.
+  std::string display(Value value);
+  // Compares two values. When both are instances of a class that defines
+  // eq(), that method decides; otherwise this is valuesEqual().
+  bool equal(Value a, Value b);
+
   // Reports a failure from inside a native function. Always returns nil so
   // a native can write `return vm.fail("...")`.
   Value fail(const char* format, ...);
@@ -75,6 +87,17 @@ class VM {
 
   // Formats the active call stack, innermost frame first.
   std::string buildTrace();
+
+ private:
+  // Shared body of stringify() and display(). depth bounds the walk the
+  // same way the plain printer does, because a container can hold
+  // itself.
+  std::string stringifyAt(Value value, bool quoteStrings, int depth);
+  // The named method of value's class, or nil when there is no such
+  // class or no such method.
+  Value classHook(Value value, ObjString* name);
+
+ public:
 
   // The lock guard this task holds while running. Natives that block must
   // release it, and must not touch the heap while it is released.

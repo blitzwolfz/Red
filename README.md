@@ -138,6 +138,7 @@ print(task.join());
 |---|---|
 | `red program [args]` | Runs a program, source or compiled. |
 | `red compile in.red [-o out]` | Compiles ahead of time to a `.redc` file. |
+| `red test [directory]` | Runs the tests in a directory. |
 | `red repl` | Interactive prompt. Handles multi-line input. |
 | `red disasm script.red` | Prints the compiled bytecode. |
 | `red bench` | Runs the benchmark programs. |
@@ -170,13 +171,19 @@ On a four thousand function program that is 41ms of start-up down to
 4.4ms. The compiled file is versioned and checked on load, and is smaller
 than the source for ordinary code.
 
-Run the test suite:
+Run the test suite. A test is a Red program with its expected output
+written in it as comments, and `red test` runs a directory of them:
 
 ```bash
-python3 tests/run.py --red build/red --tests tests
-python3 tests/run.py --red build/red --tests tests --gc-stress
-python3 tests/run.py --red build/red --tests tests --compiled
+./build/red test tests
+./build/red test tests --gc-stress
+./build/red test tests --compiled
+./build/red test tests --compiler selfhost/redc.red
 ```
+
+`--gc-stress` collects before every allocation, `--compiled` runs each
+test from a `.redc`, and `--compiler` puts the Red compiler under the
+whole suite instead of the C++ one.
 
 ## Libraries
 
@@ -369,6 +376,14 @@ print(output.split("\n").len());
   the original message wrapped, so the kind and payload do not survive
   the boundary. Return failure as a value instead:
   [guide.md](docs/guide.md#8-doing-it-in-parallel).
+- An instance is a map key by identity, not by value. A class can define
+  `eq()` for `==`, but not how it hashes, because the table cannot call
+  back into Red while it is probing.
+  [Why](docs/language.md#str-and-eq).
+- `upper()` and `lower()` only change ASCII letters.
+- POSIX only. It builds on macOS and Linux; there is no Windows port.
+- No regular expressions, no JSON and no subprocesses in the standard
+  library. The first two can be written in Red.
 - The virtual machine, the collector and the standard library are still
   C++. Only the compiler is self-hosted.
 - There is no package manager. A library is installed by copying it onto

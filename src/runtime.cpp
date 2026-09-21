@@ -38,6 +38,8 @@ void markTable(Runtime& rt, Table& table) {
 Runtime::Runtime() {
   initString = internString("init");
   messageString = internString("message");
+  strString = internString("str");
+  eqString = internString("eq");
   runtimeKind = internString("runtime");
 }
 
@@ -355,6 +357,8 @@ void Runtime::markRoots() {
 
   markObject((Obj*)initString);
   markObject((Obj*)messageString);
+  markObject((Obj*)strString);
+  markObject((Obj*)eqString);
   markObject((Obj*)runtimeKind);
   markObject((Obj*)mainModule);
 }

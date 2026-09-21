@@ -23,6 +23,10 @@ ObjNative* lookupBuiltinMethod(Runtime& runtime, Value receiver,
 // Helpers used by the individual standard library files.
 void defineGlobalFn(Runtime& runtime, const char* name, NativeFn fn,
                     int arity);
+// A builtin that is a plain value rather than a function, such as PI. A
+// module may still declare its own binding with the same name, which
+// takes priority.
+void defineGlobalValue(Runtime& runtime, const char* name, Value value);
 void defineMethodFn(Runtime& runtime, ObjType type, const char* name,
                     NativeFn fn, int arity);
 

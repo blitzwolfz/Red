@@ -95,6 +95,11 @@ class Runtime {
   // Interned names the VM needs on hot paths.
   ObjString* initString = nullptr;
   ObjString* messageString = nullptr;
+  // The two methods a class may define to say how its instances print
+  // and compare. Interned once so that looking for them costs a pointer
+  // comparison rather than a hash of the name.
+  ObjString* strString = nullptr;
+  ObjString* eqString = nullptr;
   // The kind given to an error raised by the runtime when nothing more
   // specific fits.
   ObjString* runtimeKind = nullptr;

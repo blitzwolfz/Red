@@ -41,7 +41,7 @@ same file in 3.6ms.
 To run just the suite against the self-hosted compiler:
 
 ```bash
-python3 tests/run.py --red build/red --tests tests --selfhost selfhost/redc.red
+red test tests --compiler selfhost/redc.red
 ```
 
 ## Why one file

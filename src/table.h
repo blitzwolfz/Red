@@ -65,6 +65,12 @@ class ValueMap {
   bool get(Value key, Value* out) const;
   bool set(Value key, Value value);
   bool remove(Value key);
+  // Drops every entry and the storage with them. set() grows again from
+  // nothing, the same way it did when the table was new.
+  void clear() {
+    count_ = 0;
+    slots_.clear();
+  }
   int count() const { return count_; }
   const std::vector<ValueEntry>& slots() const { return slots_; }
 

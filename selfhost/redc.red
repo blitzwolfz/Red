@@ -241,7 +241,35 @@ class Scanner {
     return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "_";
   }
 
+  isHexDigit(c) {
+    return (c >= "0" and c <= "9") or (c >= "a" and c <= "f") or
+           (c >= "A" and c <= "F");
+  }
+
+  hexValue(c) {
+    const code = c.code_at(0);
+    if (code >= 48 and code <= 57) { return code - 48; }
+    if (code >= 97 and code <= 102) { return code - 87; }
+    return code - 55;
+  }
+
   number() {
+    // 0x1f. Written out as a double the same way every other literal is,
+    // so a hex literal past 2^53 loses its low bits like any other
+    // number that large rather than meaning something different.
+    const next = this.peek();
+    if (this.source[this.start] == "0" and (next == "x" or next == "X") and
+        this.isHexDigit(this.peekNext())) {
+      this.current += 1;
+      let value = 0;
+      while (this.isHexDigit(this.peek())) {
+        value = value * 16 + this.hexValue(this.advance());
+      }
+      const hex = this.make(Tok.Number);
+      hex.number = value;
+      return hex;
+    }
+
     while (this.isDigit(this.peek())) { this.current += 1; }
     if (this.peek() == "." and this.isDigit(this.peekNext())) {
       this.current += 1;
@@ -305,6 +333,35 @@ class Scanner {
           case "\\": parts.push("\\");
           case "\"": parts.push("\"");
           case "$": parts.push("$");
+          case "u": {
+            // \u00e9 names a code point with four hex digits. \u{1f600}
+            // takes one to six, for the ones that do not fit in four.
+            let codePoint = 0;
+            let digits = 0;
+            const braced = this.match("{");
+            let wanted = 4;
+            if (braced) { wanted = 6; }
+            while (digits < wanted and this.isHexDigit(this.peek())) {
+              codePoint = codePoint * 16 + this.hexValue(this.advance());
+              digits += 1;
+            }
+            if (digits == 0 or (!braced and digits < 4)) {
+              return this.errorToken(
+                  "A '\\u' escape needs four hex digits, or braces around " +
+                  "one to six.");
+            }
+            if (braced and !this.match("}")) {
+              return this.errorToken("Expect '}' to close a '\\u' escape.");
+            }
+            // 10ffff, and the surrogate range that UTF-8 has no form for.
+            if (codePoint > 1114111 or
+                (codePoint >= 55296 and codePoint <= 57343)) {
+              return this.errorToken(
+                  "A '\\u' escape must name a code point up to 10ffff, and " +
+                  "not half of a surrogate pair.");
+            }
+            parts.push(char(codePoint));
+          }
           default:
             return this.errorToken(
                 "Unknown escape sequence '\\${escape}'.");

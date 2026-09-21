@@ -5,7 +5,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <random>
 
+#include "../util.h"
 #include "../vm.h"
 #include "builtins.h"
 
@@ -39,7 +41,7 @@ Value nativePrint(VM& vm, int argCount, Value* args) {
   std::string line;
   for (int i = 0; i < argCount; i++) {
     if (i > 0) line += " ";
-    line += valueToString(args[i]);
+    line += vm.stringify(args[i]);
   }
   line += "\n";
   // One write per call keeps output from two tasks from interleaving in
@@ -49,9 +51,32 @@ Value nativePrint(VM& vm, int argCount, Value* args) {
   return nilValue();
 }
 
+// The same as print and write, on the error stream. A program's results
+// go to stdout and its complaints go to stderr, so the two can be
+// separated by whoever runs it.
+Value nativeEprint(VM& vm, int argCount, Value* args) {
+  std::string line;
+  for (int i = 0; i < argCount; i++) {
+    if (i > 0) line += " ";
+    line += vm.stringify(args[i]);
+  }
+  line += "\n";
+  std::fwrite(line.data(), 1, line.size(), stderr);
+  (void)vm;
+  return nilValue();
+}
+
+Value nativeEwrite(VM& vm, int argCount, Value* args) {
+  std::string text;
+  for (int i = 0; i < argCount; i++) text += vm.stringify(args[i]);
+  std::fwrite(text.data(), 1, text.size(), stderr);
+  (void)vm;
+  return nilValue();
+}
+
 Value nativeWrite(VM& vm, int argCount, Value* args) {
   std::string text;
-  for (int i = 0; i < argCount; i++) text += valueToString(args[i]);
+  for (int i = 0; i < argCount; i++) text += vm.stringify(args[i]);
   std::fwrite(text.data(), 1, text.size(), stdout);
   (void)vm;
   return nilValue();
@@ -66,11 +91,11 @@ Value nativeTypeName(VM& vm, int, Value* args) {
 }
 
 Value nativeStr(VM& vm, int, Value* args) {
-  return objValue((Obj*)vm.runtime().internString(valueToString(args[0])));
+  return objValue((Obj*)vm.runtime().internString(vm.stringify(args[0])));
 }
 
 Value nativeRepr(VM& vm, int, Value* args) {
-  return objValue((Obj*)vm.runtime().internString(valueToDisplay(args[0])));
+  return objValue((Obj*)vm.runtime().internString(vm.display(args[0])));
 }
 
 Value nativeNum(VM& vm, int, Value* args) {
@@ -124,7 +149,7 @@ Value nativeError(VM& vm, int argCount, Value* args) {
     if (!wantString(vm, args[2], "error()", &given)) return nilValue();
     kind.assign(given->chars, given->length);
   }
-  return vm.makeError(kind.c_str(), valueToString(args[0]), payload);
+  return vm.makeError(kind.c_str(), vm.stringify(args[0]), payload);
 }
 
 // Turns a byte value into a one character string. This is what lets Red
@@ -139,6 +164,171 @@ Value nativeChr(VM& vm, int, Value* args) {
   }
   char byte = (char)(unsigned char)code;
   return objValue((Obj*)vm.runtime().copyString(&byte, 1));
+}
+
+// The character counterpart of chr(). chr() builds one byte; this builds
+// one character, which is one to four bytes of UTF-8.
+Value nativeChar(VM& vm, int, Value* args) {
+  double code;
+  if (!wantNumber(vm, args[0], "char()", &code)) return nilValue();
+  if (code < 0 || code > (double)kMaxCodePoint || code != std::floor(code)) {
+    return vm.fail("char() expects a code point from 0 to %u, got %s.",
+                   kMaxCodePoint, valueToString(args[0]).c_str());
+  }
+  char buffer[4];
+  size_t written = encodeUtf8((uint32_t)code, buffer);
+  if (written == 0) {
+    return vm.fail("char() cannot encode %s: it is half of a surrogate pair.",
+                   valueToString(args[0]).c_str());
+  }
+  return objValue((Obj*)vm.runtime().copyString(buffer, written));
+}
+
+// One generator for the process. Natives run while their task holds the
+// runtime lock, so no two tasks are ever inside this at once.
+std::mt19937_64& generator() {
+  static std::mt19937_64 engine(std::random_device{}());
+  return engine;
+}
+
+// rand() gives a fraction. rand(n) and rand(a, b) give whole numbers, and
+// the upper end is excluded so that rand(n) indexes an array of n things
+// and rand(a, b) covers the same values as range(a, b).
+Value nativeRand(VM& vm, int argCount, Value* args) {
+  if (argCount == 0) {
+    return numberValue(
+        std::uniform_real_distribution<double>(0.0, 1.0)(generator()));
+  }
+
+  double low = 0;
+  double high;
+  if (argCount == 1) {
+    if (!wantNumber(vm, args[0], "rand()", &high)) return nilValue();
+  } else {
+    if (!wantNumber(vm, args[0], "rand()", &low)) return nilValue();
+    if (!wantNumber(vm, args[1], "rand()", &high)) return nilValue();
+  }
+  low = std::floor(low);
+  high = std::floor(high);
+  if (high <= low) {
+    return vm.fail("rand() needs a range with something in it, got %s to %s.",
+                   valueToString(numberValue(low)).c_str(),
+                   valueToString(numberValue(high)).c_str());
+  }
+  double span = high - low;
+  double pick = std::floor(
+      std::uniform_real_distribution<double>(0.0, span)(generator()));
+  if (pick >= span) pick = span - 1;  // the open end, in case of rounding
+  return numberValue(low + pick);
+}
+
+// Fixes the sequence, so a run that uses randomness can be repeated.
+Value nativeRandSeed(VM& vm, int, Value* args) {
+  double seed;
+  if (!wantNumber(vm, args[0], "rand_seed()", &seed)) return nilValue();
+  generator().seed((uint64_t)(int64_t)seed);
+  return nilValue();
+}
+
+Value nativeRound(VM& vm, int, Value* args) {
+  double value;
+  if (!wantNumber(vm, args[0], "round()", &value)) return nilValue();
+  // Halves go away from zero, which is what people expect when they are
+  // rounding a price or a score.
+  return numberValue(std::round(value));
+}
+
+Value nativeSign(VM& vm, int, Value* args) {
+  double value;
+  if (!wantNumber(vm, args[0], "sign()", &value)) return nilValue();
+  if (value > 0) return numberValue(1);
+  if (value < 0) return numberValue(-1);
+  return numberValue(value);  // keeps 0, -0 and nan as themselves
+}
+
+Value nativeExp(VM& vm, int, Value* args) {
+  double value;
+  if (!wantNumber(vm, args[0], "exp()", &value)) return nilValue();
+  return numberValue(std::exp(value));
+}
+
+// log(x) is natural. log(x, base) is any other.
+Value nativeLog(VM& vm, int argCount, Value* args) {
+  double value;
+  if (!wantNumber(vm, args[0], "log()", &value)) return nilValue();
+  if (value < 0) {
+    return vm.failAs("domain", "log() of a negative number: %s.",
+                     valueToString(args[0]).c_str());
+  }
+  if (argCount < 2) return numberValue(std::log(value));
+
+  double base;
+  if (!wantNumber(vm, args[1], "log()", &base)) return nilValue();
+  if (base <= 0 || base == 1) {
+    return vm.failAs("domain", "log() needs a base above 0 and not 1, got %s.",
+                     valueToString(args[1]).c_str());
+  }
+  if (base == 2) return numberValue(std::log2(value));
+  if (base == 10) return numberValue(std::log10(value));
+  return numberValue(std::log(value) / std::log(base));
+}
+
+Value nativeSin(VM& vm, int, Value* args) {
+  double v;
+  if (!wantNumber(vm, args[0], "sin()", &v)) return nilValue();
+  return numberValue(std::sin(v));
+}
+
+Value nativeCos(VM& vm, int, Value* args) {
+  double v;
+  if (!wantNumber(vm, args[0], "cos()", &v)) return nilValue();
+  return numberValue(std::cos(v));
+}
+
+Value nativeTan(VM& vm, int, Value* args) {
+  double v;
+  if (!wantNumber(vm, args[0], "tan()", &v)) return nilValue();
+  return numberValue(std::tan(v));
+}
+
+Value nativeAsin(VM& vm, int, Value* args) {
+  double v;
+  if (!wantNumber(vm, args[0], "asin()", &v)) return nilValue();
+  if (v < -1 || v > 1) {
+    return vm.failAs("domain", "asin() needs a number from -1 to 1, got %s.",
+                     valueToString(args[0]).c_str());
+  }
+  return numberValue(std::asin(v));
+}
+
+Value nativeAcos(VM& vm, int, Value* args) {
+  double v;
+  if (!wantNumber(vm, args[0], "acos()", &v)) return nilValue();
+  if (v < -1 || v > 1) {
+    return vm.failAs("domain", "acos() needs a number from -1 to 1, got %s.",
+                     valueToString(args[0]).c_str());
+  }
+  return numberValue(std::acos(v));
+}
+
+// atan(y) takes one argument. atan(y, x) takes the quadrant into
+// account, which is what turns a pair of offsets into an angle.
+Value nativeAtan(VM& vm, int argCount, Value* args) {
+  double y;
+  if (!wantNumber(vm, args[0], "atan()", &y)) return nilValue();
+  if (argCount < 2) return numberValue(std::atan(y));
+  double x;
+  if (!wantNumber(vm, args[1], "atan()", &x)) return nilValue();
+  return numberValue(std::atan2(y, x));
+}
+
+// The length of the hypotenuse, without the overflow that squaring the
+// sides by hand would cause for large values.
+Value nativeHypot(VM& vm, int, Value* args) {
+  double a, b;
+  if (!wantNumber(vm, args[0], "hypot()", &a)) return nilValue();
+  if (!wantNumber(vm, args[1], "hypot()", &b)) return nilValue();
+  return numberValue(std::hypot(a, b));
 }
 
 Value nativeRange(VM& vm, int argCount, Value* args) {
@@ -271,6 +461,70 @@ Value stringBytes(VM& vm, int, Value* args) {
     result->items.push_back(numberValue((double)(unsigned char)text->chars[i]));
   }
   return objValue((Obj*)result);
+}
+
+// Characters rather than bytes. A byte that does not begin a well formed
+// UTF-8 sequence comes back on its own, so joining the result always
+// gives the original string back, text or not.
+Value stringChars(VM& vm, int, Value* args) {
+  ObjString* text = asString(args[0]);
+  ObjArray* result = vm.runtime().newArray();
+  GCRoot resultRoot(vm.runtime(), (Obj*)result);
+  size_t i = 0;
+  while (i < text->length) {
+    uint32_t codePoint;
+    size_t width = decodeUtf8(text->chars, text->length, i, &codePoint);
+    result->items.push_back(
+        objValue((Obj*)vm.runtime().copyString(text->chars + i, width)));
+    i += width;
+  }
+  return objValue((Obj*)result);
+}
+
+// The same walk, reporting each character's code point instead.
+Value stringCodePoints(VM& vm, int, Value* args) {
+  ObjString* text = asString(args[0]);
+  ObjArray* result = vm.runtime().newArray();
+  GCRoot resultRoot(vm.runtime(), (Obj*)result);
+  size_t i = 0;
+  while (i < text->length) {
+    uint32_t codePoint;
+    size_t width = decodeUtf8(text->chars, text->length, i, &codePoint);
+    result->items.push_back(numberValue((double)codePoint));
+    i += width;
+  }
+  return objValue((Obj*)result);
+}
+
+// How many characters, without building the array to count them.
+Value stringCharLen(VM&, int, Value* args) {
+  ObjString* text = asString(args[0]);
+  size_t count = 0;
+  size_t i = 0;
+  while (i < text->length) {
+    uint32_t codePoint;
+    i += decodeUtf8(text->chars, text->length, i, &codePoint);
+    count++;
+  }
+  return numberValue((double)count);
+}
+
+Value stringTrimStart(VM& vm, int, Value* args) {
+  ObjString* text = asString(args[0]);
+  size_t start = 0;
+  while (start < text->length &&
+         std::isspace((unsigned char)text->chars[start])) {
+    start++;
+  }
+  return objValue((Obj*)vm.runtime().copyString(text->chars + start,
+                                                text->length - start));
+}
+
+Value stringTrimEnd(VM& vm, int, Value* args) {
+  ObjString* text = asString(args[0]);
+  size_t end = text->length;
+  while (end > 0 && std::isspace((unsigned char)text->chars[end - 1])) end--;
+  return objValue((Obj*)vm.runtime().copyString(text->chars, end));
 }
 
 Value stringUpper(VM& vm, int, Value* args) {
@@ -531,7 +785,7 @@ Value arrayJoin(VM& vm, int argCount, Value* args) {
   std::string out;
   for (size_t i = 0; i < array->items.size(); i++) {
     if (i > 0) out += separator;
-    out += valueToString(array->items[i]);
+    out += vm.stringify(array->items[i]);
   }
   return objValue((Obj*)vm.runtime().copyString(out.data(), out.size()));
 }
@@ -573,17 +827,20 @@ Value valueEquals(VM&, int, Value* args) {
   return boolValue(deepEquals(args[0], args[1], 0));
 }
 
-Value arrayContains(VM&, int, Value* args) {
-  for (Value item : asArray(args[0])->items) {
-    if (valuesEqual(item, args[1])) return boolValue(true);
+// Searching uses the same comparison as ==, so a class with an eq() is
+// found by value here too.
+Value arrayContains(VM& vm, int, Value* args) {
+  ObjArray* array = asArray(args[0]);
+  for (size_t i = 0; i < array->items.size(); i++) {
+    if (vm.equal(array->items[i], args[1])) return boolValue(true);
   }
   return boolValue(false);
 }
 
-Value arrayIndexOf(VM&, int, Value* args) {
+Value arrayIndexOf(VM& vm, int, Value* args) {
   ObjArray* array = asArray(args[0]);
   for (size_t i = 0; i < array->items.size(); i++) {
-    if (valuesEqual(array->items[i], args[1])) return numberValue((double)i);
+    if (vm.equal(array->items[i], args[1])) return numberValue((double)i);
   }
   return numberValue(-1);
 }
@@ -680,6 +937,66 @@ Value arrayFilter(VM& vm, int, Value* args) {
   return objValue((Obj*)result);
 }
 
+// Stops at the first answer, which is the point of having these rather
+// than filtering and looking at the length.
+Value arrayAny(VM& vm, int, Value* args) {
+  ObjArray* source = asArray(args[0]);
+  for (size_t i = 0; i < source->items.size(); i++) {
+    vm.push(args[1]);
+    vm.push(source->items[i]);
+    Value matched = nilValue();
+    if (vm.callAndRun(args[1], 1, &matched) != InterpretResult::Ok) {
+      return vm.fail("any() callback failed.");
+    }
+    if (!isFalsey(matched)) return boolValue(true);
+  }
+  return boolValue(false);
+}
+
+Value arrayAll(VM& vm, int, Value* args) {
+  ObjArray* source = asArray(args[0]);
+  for (size_t i = 0; i < source->items.size(); i++) {
+    vm.push(args[1]);
+    vm.push(source->items[i]);
+    Value matched = nilValue();
+    if (vm.callAndRun(args[1], 1, &matched) != InterpretResult::Ok) {
+      return vm.fail("all() callback failed.");
+    }
+    if (isFalsey(matched)) return boolValue(false);
+  }
+  return boolValue(true);
+}
+
+// The first element the test accepts, or nil. find_index() reports where
+// it was, so that nil can be told apart from an element that is nil.
+Value arrayFind(VM& vm, int, Value* args) {
+  ObjArray* source = asArray(args[0]);
+  for (size_t i = 0; i < source->items.size(); i++) {
+    vm.push(args[1]);
+    vm.push(source->items[i]);
+    Value matched = nilValue();
+    if (vm.callAndRun(args[1], 1, &matched) != InterpretResult::Ok) {
+      return vm.fail("find() callback failed.");
+    }
+    if (!isFalsey(matched)) return source->items[i];
+  }
+  return nilValue();
+}
+
+Value arrayFindIndex(VM& vm, int, Value* args) {
+  ObjArray* source = asArray(args[0]);
+  for (size_t i = 0; i < source->items.size(); i++) {
+    vm.push(args[1]);
+    vm.push(source->items[i]);
+    Value matched = nilValue();
+    if (vm.callAndRun(args[1], 1, &matched) != InterpretResult::Ok) {
+      return vm.fail("find_index() callback failed.");
+    }
+    if (!isFalsey(matched)) return numberValue((double)i);
+  }
+  return numberValue(-1);
+}
+
 Value arrayReduce(VM& vm, int argCount, Value* args) {
   ObjArray* source = asArray(args[0]);
   size_t start = 0;
@@ -721,9 +1038,12 @@ Value mapGet(VM&, int argCount, Value* args) {
 
 Value mapSet(VM& vm, int, Value* args) {
   if (!isHashableKey(args[1])) {
-    return vm.fail(
-        "A map key must be a string, number, boolean, nil or enum member, "
-        "got %s.",
+    // Same kind as the index form, so one catch clause covers both ways
+    // of writing it.
+    return vm.failAs(
+        "key",
+        "A map key must be a string, number, boolean, nil, enum member "
+        "or instance, got %s.",
         valueTypeName(args[1]));
   }
   asMap(args[0])->entries.set(args[1], args[2]);
@@ -737,6 +1057,11 @@ Value mapHas(VM&, int, Value* args) {
 
 Value mapRemove(VM&, int, Value* args) {
   return boolValue(asMap(args[0])->entries.remove(args[1]));
+}
+
+Value mapClear(VM&, int, Value* args) {
+  asMap(args[0])->entries.clear();
+  return args[0];
 }
 
 Value mapKeys(VM& vm, int, Value* args) {
@@ -770,8 +1095,8 @@ Value mapEntries(VM& vm, int, Value* args) {
 bool addToSet(VM& vm, ObjSet* set, Value item) {
   if (!isHashableKey(item)) {
     vm.failAs("key",
-              "A set can hold strings, numbers, booleans, nil and enum "
-              "members, not %s.",
+              "A set can hold strings, numbers, booleans, nil, enum "
+              "members and instances, not %s.",
               valueTypeName(item));
     return false;
   }
@@ -797,10 +1122,15 @@ Value nativeSet(VM& vm, int argCount, Value* args) {
       if (slot.used) set->entries.set(slot.key, nilValue());
     }
   } else if (isString(source)) {
+    // Characters, so that set("héllo") holds five things rather than six.
     ObjString* text = asString(source);
-    for (size_t i = 0; i < text->length; i++) {
-      set->entries.set(objValue((Obj*)rt.copyString(text->chars + i, 1)),
+    size_t i = 0;
+    while (i < text->length) {
+      uint32_t codePoint;
+      size_t width = decodeUtf8(text->chars, text->length, i, &codePoint);
+      set->entries.set(objValue((Obj*)rt.copyString(text->chars + i, width)),
                        nilValue());
+      i += width;
     }
   } else {
     return vm.failAs("type",
@@ -831,9 +1161,8 @@ Value setLen(VM&, int, Value* args) {
   return numberValue((double)asSet(args[0])->entries.count());
 }
 
-Value setClear(VM& vm, int, Value* args) {
-  ObjSet* replacement = vm.runtime().newSet();
-  asSet(args[0])->entries = replacement->entries;
+Value setClear(VM&, int, Value* args) {
+  asSet(args[0])->entries.clear();
   return args[0];
 }
 
@@ -935,6 +1264,8 @@ Value mapValues(VM& vm, int, Value* args) {
 void installCore(Runtime& runtime) {
   defineGlobalFn(runtime, "print", nativePrint, -1);
   defineGlobalFn(runtime, "write", nativeWrite, -1);
+  defineGlobalFn(runtime, "eprint", nativeEprint, -1);
+  defineGlobalFn(runtime, "ewrite", nativeEwrite, -1);
   defineGlobalFn(runtime, "clock", nativeClock, 0);
   defineGlobalFn(runtime, "type", nativeTypeName, 1);
   defineGlobalFn(runtime, "str", nativeStr, 1);
@@ -945,6 +1276,7 @@ void installCore(Runtime& runtime) {
   defineGlobalFn(runtime, "assert", nativeAssert, -1);
   defineGlobalFn(runtime, "error", nativeError, -1);
   defineGlobalFn(runtime, "chr", nativeChr, 1);
+  defineGlobalFn(runtime, "char", nativeChar, 1);
   defineGlobalFn(runtime, "set", nativeSet, -1);
   defineGlobalFn(runtime, "range", nativeRange, -1);
   defineGlobalFn(runtime, "input", nativeInput, -1);
@@ -955,11 +1287,35 @@ void installCore(Runtime& runtime) {
   defineGlobalFn(runtime, "pow", nativePow, 2);
   defineGlobalFn(runtime, "min", nativeMin, -1);
   defineGlobalFn(runtime, "max", nativeMax, -1);
+  defineGlobalFn(runtime, "round", nativeRound, 1);
+  defineGlobalFn(runtime, "sign", nativeSign, 1);
+  defineGlobalFn(runtime, "exp", nativeExp, 1);
+  defineGlobalFn(runtime, "log", nativeLog, -1);
+  defineGlobalFn(runtime, "sin", nativeSin, 1);
+  defineGlobalFn(runtime, "cos", nativeCos, 1);
+  defineGlobalFn(runtime, "tan", nativeTan, 1);
+  defineGlobalFn(runtime, "asin", nativeAsin, 1);
+  defineGlobalFn(runtime, "acos", nativeAcos, 1);
+  defineGlobalFn(runtime, "atan", nativeAtan, -1);
+  defineGlobalFn(runtime, "hypot", nativeHypot, 2);
+  defineGlobalFn(runtime, "rand", nativeRand, -1);
+  defineGlobalFn(runtime, "rand_seed", nativeRandSeed, 1);
+
+  // The two constants worth having by name. They are ordinary bindings,
+  // so a program that wants the letters for something else may shadow
+  // them.
+  defineGlobalValue(runtime, "PI", numberValue(3.14159265358979323846));
+  defineGlobalValue(runtime, "E", numberValue(2.71828182845904523536));
 
   defineMethodFn(runtime, ObjType::String, "len", stringLen, 1);
   defineMethodFn(runtime, ObjType::String, "code_at", stringCodeAt, 2);
   defineMethodFn(runtime, ObjType::String, "bytes", stringBytes, 1);
+  defineMethodFn(runtime, ObjType::String, "chars", stringChars, 1);
+  defineMethodFn(runtime, ObjType::String, "code_points", stringCodePoints, 1);
+  defineMethodFn(runtime, ObjType::String, "char_len", stringCharLen, 1);
   defineMethodFn(runtime, ObjType::String, "upper", stringUpper, 1);
+  defineMethodFn(runtime, ObjType::String, "trim_start", stringTrimStart, 1);
+  defineMethodFn(runtime, ObjType::String, "trim_end", stringTrimEnd, 1);
   defineMethodFn(runtime, ObjType::String, "lower", stringLower, 1);
   defineMethodFn(runtime, ObjType::String, "trim", stringTrim, 1);
   defineMethodFn(runtime, ObjType::String, "split", stringSplit, 2);
@@ -988,6 +1344,10 @@ void installCore(Runtime& runtime) {
   defineMethodFn(runtime, ObjType::Array, "sort", arraySort, -1);
   defineMethodFn(runtime, ObjType::Array, "map", arrayMap, 2);
   defineMethodFn(runtime, ObjType::Array, "filter", arrayFilter, 2);
+  defineMethodFn(runtime, ObjType::Array, "any", arrayAny, 2);
+  defineMethodFn(runtime, ObjType::Array, "all", arrayAll, 2);
+  defineMethodFn(runtime, ObjType::Array, "find", arrayFind, 2);
+  defineMethodFn(runtime, ObjType::Array, "find_index", arrayFindIndex, 2);
   defineMethodFn(runtime, ObjType::Array, "reduce", arrayReduce, -1);
 
   defineMethodFn(runtime, ObjType::Map, "len", mapLen, 1);
@@ -995,6 +1355,7 @@ void installCore(Runtime& runtime) {
   defineMethodFn(runtime, ObjType::Map, "set", mapSet, 3);
   defineMethodFn(runtime, ObjType::Map, "has", mapHas, 2);
   defineMethodFn(runtime, ObjType::Map, "remove", mapRemove, 2);
+  defineMethodFn(runtime, ObjType::Map, "clear", mapClear, 1);
   defineMethodFn(runtime, ObjType::Map, "keys", mapKeys, 1);
   defineMethodFn(runtime, ObjType::Map, "values", mapValues, 1);
   defineMethodFn(runtime, ObjType::Map, "entries", mapEntries, 1);

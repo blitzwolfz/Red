@@ -60,5 +60,5 @@ try {
   set([[1, 2]]);
 } catch (e: "key") {
   print(e.message);
-  // expect: A set can hold strings, numbers, booleans, nil and enum members, not array.
+  // expect: A set can hold strings, numbers, booleans, nil, enum members and instances, not array.
 }

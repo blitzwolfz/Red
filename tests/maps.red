@@ -41,7 +41,16 @@ print(bySuit[Suit.Hearts], bySuit[Suit.Spades]);   // expect: red nil
 print({"a": [1, 2]}.equals({"a": [1, 2]}));        // expect: true
 print({"a": 1}.equals({"a": 1, "b": 2}));          // expect: false
 
+// clear empties a map in place, the way it does an array or a set.
+const counts = {"a": 1, "b": 2};
+print(counts.len());                     // expect: 2
+print(counts.clear().len());             // expect: 0
+print(counts.has("a"));                  // expect: false
+counts.set("c", 3);
+print(counts.get("c"));                  // expect: 3
+
+
 // Anything else is refused.
 const bad = {};
 bad[[1, 2]] = "x";
-// expect runtime error: A map key must be a string, number, boolean, nil or enum member, got array.
+// expect runtime error: A map key must be a string, number, boolean, nil, enum member or instance, got array.

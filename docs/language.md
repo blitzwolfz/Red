@@ -29,7 +29,7 @@ Red has five kinds of value plus the objects listed later.
 |---|---|---|
 | `nil` | `nil` | The absence of a value. |
 | `bool` | `true`, `false` | |
-| `number` | `1`, `-2.5`, `1e9` | One numeric type, a 64 bit float. |
+| `number` | `1`, `-2.5`, `1e9`, `0xff` | One numeric type, a 64 bit float. |
 | `string` | `"text"` | |
 | `array` | `[1, 2, 3]` | |
 | `map` | `{"a": 1}` | |
@@ -42,6 +42,25 @@ if (0) { print("this runs"); }
 ```
 
 Whole numbers print without a decimal point. `1.0` prints as `1`.
+
+A number prints as the shortest text that reads back as the same value,
+so `num(str(x))` always gives `x` again. Above 2^53, where doubles stop
+counting by one, the exponent form takes over rather than printing digits
+the value does not carry.
+
+```red
+print(0.1 + 0.2);            // 0.30000000000000004
+print(1e15);                 // 1000000000000000
+print(1e16);                 // 1e+16
+```
+
+Hex literals are written `0x` and are ordinary numbers, which is usually
+how a mask or a byte value is spelled.
+
+```red
+print(0xff, 0xDEADBEEF);     // 255 3735928559
+print(0xff & 0x0f);          // 15
+```
 
 ## Bindings
 
@@ -84,7 +103,12 @@ fun area(width: Float, height: Float) -> Float {
 ## Strings
 
 Strings use double quotes. These escapes are understood: `\n`, `\t`,
-`\r`, `\0`, `\\`, `\"` and `\$`.
+`\r`, `\0`, `\\`, `\"`, `\$`, and `\u` for a code point.
+
+```red
+print("caf\u00e9");           // café, from four hex digits
+print("\u{1f600}");           // 😀, from one to six inside braces
+```
 
 Any expression can be written inside `${ }`:
 
@@ -98,13 +122,26 @@ print("nested ${"in" + "ner"}");
 A `$` that is not followed by `{` is an ordinary character, so `"$5"`
 needs no escape.
 
-Strings compare in dictionary order, and index by character:
+Strings compare in dictionary order, and index by byte:
 
 ```red
 print("apple" < "banana");   // true
 print("hello"[0]);           // h
 print("hello"[-1]);          // o
 ```
+
+A string holds bytes and may contain anything, text or not. `len()`,
+indexing and `code_at()` work in bytes; `chars()`, `code_points()`,
+`char_len()` and `for ... in` work in characters, decoded as UTF-8.
+
+```red
+const greeting = "héllo";
+print(greeting.len());          // 6, because é takes two bytes
+print(greeting.char_len());     // 5
+for (let c in greeting) { write(c, "."); }   // h.é.l.l.o.
+```
+
+[stdlib.md](stdlib.md#text-and-bytes) has the whole pair of tables.
 
 ## Operators
 
@@ -536,6 +573,61 @@ print(describe());
 
 A field holding a function hides a method with the same name.
 
+### str and eq
+
+Two method names mean something to the runtime. Neither is required.
+
+`str()` says how an instance is written. It is used by `print`, by
+`str()` and `repr()`, by `${}` interpolation, and by the printed form of
+an array or map that holds one.
+
+```red
+class Point {
+  init(x, y) { this.x = x; this.y = y; }
+  str() { return "(${this.x}, ${this.y})"; }
+}
+
+print(Point(1, 2));            // (1, 2)
+print([Point(1, 2)]);          // [(1, 2)]
+print("at ${Point(1, 2)}");    // at (1, 2)
+```
+
+`eq(other)` says what `==` means for two instances. It is also what
+`contains()` and `index_of()` search with. Without it, two instances are
+equal only when they are the same object.
+
+```red
+class Point {
+  init(x, y) { this.x = x; this.y = y; }
+  eq(other) {
+    return type(other) == "instance" and this.x == other.x and
+           this.y == other.y;
+  }
+}
+
+print(Point(1, 2) == Point(1, 2));   // true
+```
+
+A value is always equal to itself whatever `eq` does, because the
+identity check comes first.
+
+An instance may be a map key or a set member, **by identity**: two
+objects with the same fields are two keys, the same way they are two
+objects. `eq` does not change that, because a hash table cannot call back
+into Red while it is probing. A class whose instances should key by value
+provides something to key on, and the program uses that:
+
+```red
+class Point {
+  init(x, y) { this.x = x; this.y = y; }
+  key() { return "${this.x},${this.y}"; }
+}
+
+const seen = {};
+seen.set(Point(1, 2).key(), "visited");
+print(seen.get(Point(1, 2).key(), "no"));   // visited
+```
+
 ## Errors
 
 ```red
@@ -832,6 +924,22 @@ primary        -> NUMBER | STRING | interpolation
 interpolation  -> STRING_PART ( expression STRING_PART )* 
 arguments      -> expression ( "," expression )*
 ```
+
+Tokens:
+
+```
+NUMBER         -> DIGIT+ ( "." DIGIT+ )? ( ( "e" | "E" ) ( "+" | "-" )? DIGIT+ )?
+                | "0" ( "x" | "X" ) HEX+
+STRING         -> '"' ( character | escape )* '"'
+escape         -> "\\" ( "n" | "t" | "r" | "0" | "\\" | '"' | "$"
+                       | "u" HEX HEX HEX HEX
+                       | "u" "{" HEX HEX? HEX? HEX? HEX? HEX? "}" )
+IDENT          -> ( ALPHA | "_" ) ( ALPHA | DIGIT | "_" )*
+```
+
+A `\u` escape names a code point up to `10ffff` and is written into the
+string as UTF-8. Half of a surrogate pair is refused, because UTF-8 has
+no form for one.
 
 ## Reserved words
 
