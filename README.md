@@ -1,10 +1,107 @@
-# Red
+<div align="center">
+  <img src="assets/red-panda-logo.png" alt="Red programming language red panda mascot" width="480">
 
-A small programming language with a bytecode compiler, a stack virtual
-machine, a mark and sweep garbage collector, and tasks with channels.
-Written in C++20, with no third-party dependencies.
+  <p>A small, fast programming language with a bytecode compiler, a stack virtual machine, and lightweight concurrent tasks.</p>
 
-The compiler is also written in Red, and it reproduces itself.
+  <p>
+    <a href="docs/guide.md">Learn Red</a> ·
+    <a href="examples/tour.red">See an example</a> ·
+    <a href="docs/language.md">Read the reference</a>
+  </p>
+</div>
+
+Red is a compact programming language for writing command-line tools,
+experiments, and small services. It is written in C++20, has no third-party
+runtime dependencies, and includes a compiler, debugger, formatter, standard
+library, language server, and test runner.
+
+The compiler is also written in Red. It can compile itself and produces the
+same bytecode as the C++ compiler.
+
+## Try it in a minute
+
+### Requirements
+
+- CMake 3.16 or newer
+- A C++20 compiler
+- Python 3 is optional, for comparing benchmarks
+- A JDK is optional, for the legacy v1 interpreter
+
+Red currently targets POSIX systems: macOS and Linux. Windows is not supported.
+
+### Build and test
+
+From the repository root:
+
+```bash
+./setup.sh
+```
+
+The setup script checks your tools, builds the interpreter at `build/red`, and
+runs the test suite. To build without running tests:
+
+```bash
+./setup.sh --quick
+```
+
+To build with AddressSanitizer and UndefinedBehaviorSanitizer enabled:
+
+```bash
+./setup.sh --debug
+```
+
+### Run your first program
+
+Create `hello.red`:
+
+```red
+const names = args();
+
+if (names.len() == 0) {
+  print("hello, world");
+} else {
+  for (let name in names) { print("hello, ${name}"); }
+}
+```
+
+Run it with the freshly built interpreter:
+
+```bash
+./build/red hello.red
+./build/red hello.red Ada Grace
+```
+
+Or open the interactive prompt:
+
+```bash
+./build/red repl
+```
+
+For a guided project, work through [the log summariser tutorial](docs/guide.md)
+or run the language tour:
+
+```bash
+./build/red examples/tour.red
+```
+
+## What Red gives you
+
+Red keeps the syntax small while still covering the features useful for real
+programs:
+
+| Feature | Included |
+|---|---|
+| Execution | Bytecode compiler and stack-based virtual machine |
+| Memory | Mark-and-sweep garbage collector |
+| Concurrency | Tasks and buffered channels, with safe shared containers |
+| Types | Optional annotations, runtime checks, and types as values |
+| Data | Arrays, maps, sets, bytes, strings, enums, classes, and modules |
+| Errors | Typed errors, filters, `try`/`catch`/`finally`, and payloads |
+| Tools | REPL, debugger, formatter, disassembler, test runner, and LSP |
+| Native code | C and C++ extensions through a small FFI |
+| Distribution | Compile ahead of time or build a standalone executable |
+
+Here is a small concurrent program:
 
 ```red
 fun worker(jobs, results) {
@@ -24,246 +121,82 @@ jobs.close();
 task.join();
 ```
 
-## Start here
+The full syntax and semantics are in [the language reference](docs/language.md).
 
-```bash
-./setup.sh
-```
+## Everyday commands
 
-That checks what you have installed, builds `build/red`, and runs the
-tests. You need CMake 3.16 or newer and a C++20 compiler. A JDK is
-optional and only builds the old v1 interpreter. `./setup.sh --help`
-lists the other flags, including `--install PREFIX`.
+The executable built by `setup.sh` is `build/red`:
 
-Then:
-
-```bash
-./build/red examples/tour.red       # every part of the language
-./build/red repl                    # an interactive prompt
-./build/red bench                   # the benchmark programs
-```
-
-| If you want to | Read |
+| Command | Use it to |
 |---|---|
-| Write a program | [docs/guide.md](docs/guide.md), which builds one from nothing |
-| Look something up | [docs/language.md](docs/language.md), [docs/stdlib.md](docs/stdlib.md) |
-| Write a library, in Red or C++ | [docs/libraries.md](docs/libraries.md) |
-| Understand the implementation | [docs/design.md](docs/design.md) |
+| `red program.red [args]` | Run a Red program |
+| `red repl` | Try expressions interactively |
+| `red compile in.red [-o out]` | Write a `.redc` bytecode file |
+| `red build in.red [-o name]` | Create a standalone executable |
+| `red test [directory]` | Run Red tests |
+| `red debug program.red` | Step through a program and inspect locals |
+| `red fmt -w files` | Format source files in place |
+| `red fmt --check files` | Check formatting without changing files |
+| `red disasm program.red` | Inspect compiled bytecode |
+| `red bench` | Run the included benchmarks |
+| `red --trace program.red` | Print instructions and the stack while running |
 
-## The language
-
-Full reference: [docs/language.md](docs/language.md).
-
-```red
-// let and const, with optional types that are checked
-let count = 0;
-const limit: Int = 10;
-
-// string interpolation and compound assignment
-count += 3;
-print("${count} of ${limit}");
-
-// arrays and maps, walked with for-in
-const names = ["ann", "bob"];
-const ages = {"ann": 31, "bob": 25};
-for (let name in names) { print(name, ages[name]); }
-print(names.map(fun (n) { return ages[n]; }));
-
-// types are values: ask for one, or ask a question about one
-fun area(w: Num, h: Num) -> Num { return w * h; }
-print(type_of(3), 3 is Int, [1, 2] is [Num]);
-
-// enums, with names that survive into error messages
-enum Status { Ok = 200, NotFound = 404 }
-print(Status.from(404));          // Status.NotFound
-
-// destructuring, including in a loop
-const [first, ...others] = names;
-for (let [who, years] in ages.entries()) { print(who, years); }
-
-// switch, with no fall through
-switch (count) {
-  case 1, 2: print("few");
-  case 3: print("three");
-  default: print("many");
-}
-
-// errors carry a kind, catch clauses select on it, finally always runs
-const handle = open(path, "r");
-try {
-  loadConfig(handle);
-} catch (e: ConfigError) {
-  report(e.message);
-} catch (e: "io") {
-  report("could not read the file");
-} finally {
-  handle.close();
-}
-
-// sets, with the usual combining operations
-const seen = set(["a", "b"]);
-print(seen.union(set(["c"])).len());
-
-// default and rest parameters
-fun join(separator = ", ", ...parts) { return parts.join(separator); }
-
-// bitwise operators on 32 bit integers, and byte level access
-print((212 << 8) | 49, chr(82), "R".code_at(0));
-
-// classes and single inheritance
-class Animal {
-  init(kind) { this.kind = kind; }
-  speak() { return "..."; }
-}
-class Dog < Animal {
-  init() { super.init("dog"); }
-  speak() { return "woof"; }
-}
-
-// errors are values
-try {
-  throw error("bad input", {"field": "age"});
-} catch (e) {
-  print(e.message, e.payload["field"]);
-}
-
-// text is characters, data is bytes
-print("h\u00e9llo".char_len(), "h\u00e9llo".len());   // 5 6
-
-// regular expressions, with no way to make one take exponential time
-const stamp = regex("(\\d{4})-(\\d{2})-(\\d{2})");
-print(stamp.find("due 2024-02-29")["groups"]);    // ["2024", "02", "29"]
-
-// running another program, with the arguments passed through untouched
-print(run(["git", "rev-parse", "HEAD"])["out"].trim());
-
-// modules
-import "util.red" as util;
-
-// tasks
-const task = spawn expensive(input);
-print(task.join());
-```
-
-## Tools
-
-| Command | What it does |
-|---|---|
-| `red program [args]` | Runs a program, source or compiled. |
-| `red compile in.red [-o out]` | Compiles ahead of time to a `.redc` file. |
-| `red build in.red [-o name]` | Writes a standalone executable. |
-| `red test [directory]` | Runs the tests in a directory. |
-| `red debug script.red` | Runs a program under the debugger. |
-| `red fmt [-w] [files]` | Formats source. `--check` reports what would change. |
-| `red repl` | Interactive prompt. Handles multi-line input. |
-| `red disasm script.red` | Prints the compiled bytecode. |
-| `red bench` | Runs the benchmark programs. |
-| `red legacy script.red` | Runs a script on the v1 interpreter. |
-| `red --trace script.red` | Prints every instruction and the stack. |
-| `red --gc-log script.red` | Reports each collection. |
-| `red --gc-stress script.red` | Collects before every allocation. |
-
-`--gc-stress` matters most. Collector bugs normally show up once in a
-thousand runs; this makes them show up on the first. It caught two while
-this was being written.
-
-`red debug` stops on lines, steps into, over and out of calls, sets
-breakpoints, and prints the locals in any frame by name.
-
-```
-$ red debug wordcount.red
-(red) b 14
-(red) c
-wordcount.red:14  in count
-  total = total + 1;
-(red) v
-  total            0
-  word             the
-(red) bt
-```
-
-It needs the source. A `.redc` has no names in it.
-
-`red fmt` formats source. It re-indents and re-spaces; it does not
-re-wrap, so where you put a line break, a line break stays. Every `.red`
-file in this repository is formatted with it, and continuous integration
-checks that they stay that way.
+Useful examples:
 
 ```bash
-red fmt -w src.red          # rewrite in place
-red fmt --check *.red       # exit 1 if anything would change
+# Compile once, then run the bytecode.
+./build/red compile examples/tour.red
+./build/red examples/tour.redc
+
+# Build a self-contained executable.
+./build/red build examples/logstat/logstat.red -o logstat
+./logstat examples/logstat/sample.log
+
+# Use the debugger.
+./build/red debug examples/word_count.red
+
+# Make the garbage collector collect before every allocation.
+./build/red test tests --gc-stress
 ```
 
-Before writing anything it lexes its own output and compares the tokens
-to the input. If they differ it refuses and says so, so a bug in the
-formatter costs you a message, not your file.
+The debugger uses source line information, so give it a `.red` file rather
+than a compiled `.redc` file. The formatter checks that its output tokenizes
+the same way before it overwrites a file.
 
-There is a language server too, [`tools/red-lsp.red`](tools/red-lsp.red),
-written in Red. It gives an editor the compiler's own diagnostics as you
-type, document symbols, go to definition, hover and completion.
-[editors/README.md](editors/README.md) has the settings.
+## Tests
 
-```
-$ red disasm examples/tiny.red
-== square ==
-0000    1 GET_LOCAL             1
-0002    | GET_LOCAL             1
-0004    | MULTIPLY
-0005    | RETURN
-```
-
-Compiling ahead of time removes start-up, not run time:
-
-```bash
-red compile examples/tour.red
-red examples/tour.redc
-```
-
-On a four thousand function program that is 41ms of start-up down to
-4.4ms. The compiled file is versioned and checked on load, and is smaller
-than the source for ordinary code.
-
-Ship a program to someone who does not have Red by building it into one
-file:
-
-```bash
-red build examples/logstat/logstat.red -o logstat
-./logstat access.log
-```
-
-That copies the interpreter, puts the compiled program and every module
-it imports on the end of it, and marks it executable. Nothing else has to
-be on the machine. It is about half a megabyte whatever the program
-does, since nearly all of that is the interpreter.
-
-Run the test suite. A test is a Red program with its expected output
-written in it as comments, and `red test` runs a directory of them:
+Tests are ordinary Red programs with expected output written in comments. Run
+the complete suite with:
 
 ```bash
 ./build/red test tests
-./build/red test tests --gc-stress
-./build/red test tests --compiled
+```
+
+The repository also supports these useful variants:
+
+```bash
+./build/red test tests --gc-stress   # stress the collector
+./build/red test tests --compiled    # run tests from .redc files
 ./build/red test tests --compiler selfhost/redc.red
 ```
 
-`--gc-stress` collects before every allocation, `--compiled` runs each
-test from a `.redc`, and `--compiler` puts the Red compiler under the
-whole suite in place of the C++ one.
+The last command runs the suite using the self-hosted compiler instead of the
+C++ compiler.
 
-## Libraries
+## Libraries and native extensions
 
-A library is a Red file other programs import. `import` looks beside the
-importing file first, then on `RED_PATH`, then in the directories that
-ship with the interpreter. Install one and it is reachable everywhere by
-bare name.
+A library is simply a Red file that another program imports:
 
 ```red
 import "cli.red" as cli;
 ```
 
-When one part of a library needs to be fast, or needs something the
-standard library has not got, write that part in C or C++ and load it as
-an extension.
+Imports look beside the importing file first, then on `RED_PATH`, then in the
+directories that ship with the interpreter. The repository includes Red-only
+libraries such as [`lib/json.red`](lib/json.red) and [`lib/cli.red`](lib/cli.red).
+
+When a library needs native code, write a C or C++ extension and load it with
+the FFI:
 
 ```cpp
 #include "red_ffi.hpp"
@@ -279,189 +212,84 @@ RED_FUNCTION(mathx_hypot) {
 
 ```red
 const lib = ffi_open("mathx.so");
-print(lib.sym("mathx_hypot")(3, 4));      // 5
+print(lib.sym("mathx_hypot")(3, 4));
 ```
 
-[`lib/cli.red`](lib/cli.red) and [`lib/json.red`](lib/json.red) are
-written entirely in Red. [`lib/crc32.red`](lib/crc32.red) has both
-halves: Red that works on its own, and a C++ extension it uses when one
-is installed. [docs/libraries.md](docs/libraries.md) covers writing
-either.
+See [docs/libraries.md](docs/libraries.md) for the search path, extension
+build helper, and complete FFI contract.
 
-## The compiler, in Red
+## A self-hosted compiler
 
-[`selfhost/redc.red`](selfhost/redc.red) is a compiler for Red, written
-in Red. It emits the same bytecode and writes the same `.redc` files as
-the C++ compiler.
+[`selfhost/redc.red`](selfhost/redc.red) contains a compiler written in Red.
+The bootstrap check builds that compiler, uses it to compile itself, and
+compares the resulting bytecode:
 
 ```bash
-$ selfhost/bootstrap.sh
-B and C are identical. The compiler reproduces itself.
-A and B are identical too: the two compilers agree byte for byte.
-50 identical, 0 different
-31/31 tests passed (compiled by the self-hosted compiler)
+selfhost/bootstrap.sh
 ```
 
-The first line is the classic test: compile the Red compiler with the C++
-one, then with itself twice, and the last two results must match. The
-second is stronger — the two compilers produce the same bytes for every
-Red program in the repository. The third compiles each of those with both
-and compares; the fourth runs the whole conformance suite on bytecode the
-Red compiler produced.
+The compiler emits the same `.redc` format as the C++ compiler. See
+[docs/bootstrapping.md](docs/bootstrapping.md) for the three-stage process.
 
-It compiles itself, 2,800 lines, in about 80ms. The C++ compiler does the
-same file in 3.6ms, so the Red one is roughly twenty times slower, which
-is about what an interpreted compiler costs and fast enough that the
-three stage bootstrap finishes in under a second.
-[docs/bootstrapping.md](docs/bootstrapping.md) has the plan this
-finished, and what removing the rest of the C++ would mean.
+## Find your way around
 
-## Numbers
-
-Measured on an Apple M3, against CPython 3.14. Each program is run three
-times and the fastest run is reported. Both versions of each benchmark do
-the same work and their output is compared. Reproduce with
-`python3 bench/compare.py --red build/red --markdown`.
-
-| benchmark | what it measures | red | python | ratio |
-|---|---|--:|--:|--:|
-| fib | recursive calls, no allocation | 0.20s | 0.16s | 1.23x |
-| loop | tight arithmetic loop | 0.97s | 0.95s | 1.03x |
-| string | building and inspecting short strings | 0.45s | 0.12s | 3.92x |
-| alloc | allocation churn, collector bound | 0.41s | 0.30s | 1.36x |
-| method | method dispatch through inheritance | 0.41s | 0.54s | 0.75x |
-
-A ratio below 1.00 means Red was faster.
-
-Calls, loops and allocation land near CPython. Method dispatch is
-faster. Strings are the weak spot at 3.9x, down from 5.6x: only one and
-two character strings are interned now, so building a long one no longer
-pays for a hash table insert nothing will ever look up.
-[docs/design.md](docs/design.md#value-layout) explains the rest.
-
-## Architecture
-
-```
-  source                                       ┌──────────────────┐
-    │                                          │     Runtime      │
-    ▼                                          │                  │
-┌─────────┐   tokens   ┌──────────┐            │  heap            │
-│ Scanner │ ─────────► │ Compiler │            │  string interner │
-└─────────┘            └──────────┘            │  module cache    │
-                            │                  │  collector       │
-                            │ bytecode         │  one lock        │
-                            ▼                  └──────────────────┘
-                       ┌──────────┐                 ▲    ▲    ▲
-                       │  Chunk   │                 │    │    │
-                       │ code     │            ┌────┘    │    └────┐
-                       │ constants│            │         │         │
-                       │ lines    │        ┌───┴──┐  ┌───┴──┐  ┌───┴──┐
-                       └──────────┘        │  VM  │  │  VM  │  │  VM  │
-                            │              │ task │  │ task │  │ task │
-                            └─────────────►│      │  │      │  │      │
-                                           │stack │  │stack │  │stack │
-                                           │frames│  │frames│  │frames│
-                                           └──────┘  └──────┘  └──────┘
-```
-
-There is no syntax tree. The compiler reads a token, emits bytecode, and
-forgets.
-
-One `Runtime` per process owns the heap. Each task gets its own `VM` with
-its own value stack and call frames. A task holds the runtime lock while
-it executes bytecode and drops it before anything that blocks. Collection
-happens only under that lock, which is what makes the other tasks' stacks
-safe to scan: none of them are moving.
-
-| Where | What |
+| Path | Purpose |
 |---|---|
-| [`src/scanner.cpp`](src/scanner.cpp) | Tokens, including string interpolation. |
-| [`src/compiler.cpp`](src/compiler.cpp) | Single pass, Pratt expressions, emits bytecode. |
-| [`src/serialize.cpp`](src/serialize.cpp) | Reading and writing `.redc` files. |
-| [`src/vm.cpp`](src/vm.cpp) | The dispatch loop, calls, closures, unwinding. |
-| [`src/runtime.cpp`](src/runtime.cpp) | Allocation and the collector. |
-| [`src/value.h`](src/value.h), [`src/object.h`](src/object.h) | Value layout and heap types. |
-| [`src/table.cpp`](src/table.cpp) | Hash tables for globals, fields and maps. |
-| [`src/debug.cpp`](src/debug.cpp) | The disassembler, shared with `--trace`. |
-| [`src/stdlib/`](src/stdlib) | Built-in functions and methods. |
-| [`selfhost/redc.red`](selfhost/redc.red) | The same scanner, compiler and writer, in Red. |
-| [`tools/red-lsp.red`](tools/red-lsp.red) | The language server, also in Red. |
-| [`lib/`](lib) | Libraries that ship with the interpreter. |
-| [`ffi/`](ffi) | The extension contract, in C and C++. |
-| [`legacy/`](legacy) | The v1 interpreter, in Java, still working. |
+| [`examples/`](examples) | Small runnable programs |
+| [`examples/logstat/`](examples/logstat) | A complete multi-file application with tests |
+| [`docs/guide.md`](docs/guide.md) | Build a real program from start to finish |
+| [`docs/language.md`](docs/language.md) | Language reference and grammar |
+| [`docs/stdlib.md`](docs/stdlib.md) | Built-in functions and methods |
+| [`docs/libraries.md`](docs/libraries.md) | Red libraries and C/C++ extensions |
+| [`docs/design.md`](docs/design.md) | Runtime and implementation decisions |
+| [`docs/bytecode.md`](docs/bytecode.md) | Instructions and `.redc` format |
+| [`docs/bootstrapping.md`](docs/bootstrapping.md) | Self-hosting details |
+| [`docs/native.md`](docs/native.md) | Native execution notes |
+| [`tools/red-lsp.red`](tools/red-lsp.red) | Language server |
+| [`editors/README.md`](editors/README.md) | Editor setup |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release and compatibility notes |
 
-## Running v1 code
+## Project layout
 
-The original Red was a tree-walking interpreter in Java. It is still in
-[`legacy/`](legacy), it still builds, and v2 still runs it by starting it
-as a child process.
-
-```bash
-red legacy legacy/main.red
+```text
+src/       C++ compiler, runtime, VM, debugger, and standard library
+lib/       Libraries shipped with Red
+examples/  Programs and a complete logstat example
+tests/     Conformance tests
+ffi/       C and C++ extension examples
+selfhost/  The compiler written in Red
+tools/     The language server and development tools
+legacy/    The original v1 Java interpreter
+docs/      Guides and implementation notes
+assets/    Source-controlled project artwork
 ```
 
-```red
-const output = legacy_output("legacy/main.red");
-print(output.split("\n").len());
-```
+## Current boundaries
 
-## Examples
+Red is intentionally small and still evolving. The important limitations are:
 
-| File | What it shows |
-|---|---|
-| [`examples/tour.red`](examples/tour.red) | Every part of the language. |
-| [`examples/logstat/`](examples/logstat) | A whole program: arguments, modules, files, tasks, tests. |
-| [`examples/library_tour.red`](examples/library_tour.red) | Using libraries, in Red and in C++. |
-| [`examples/echo_server.red`](examples/echo_server.red) | A concurrent TCP echo server, with clients. |
-| [`examples/word_count.red`](examples/word_count.red) | Parallel word count over a file. |
-| [`examples/legacy_bridge.red`](examples/legacy_bridge.red) | Calling v1 from v2. |
-| [`examples/mini_compiler.red`](examples/mini_compiler.red) | A compiler and virtual machine for arithmetic, written in Red. |
-
-## Documentation
-
-| File | Contents |
-|---|---|
-| [docs/guide.md](docs/guide.md) | Writing a whole program, start to finish. |
-| [docs/language.md](docs/language.md) | Language reference and grammar. |
-| [docs/stdlib.md](docs/stdlib.md) | Built-in functions and methods. |
-| [docs/libraries.md](docs/libraries.md) | Writing a library, in Red or in C++. |
-| [docs/design.md](docs/design.md) | Why it is built this way, and what was rejected. |
-| [docs/bytecode.md](docs/bytecode.md) | The instruction set and the compiled file format. |
-| [docs/bootstrapping.md](docs/bootstrapping.md) | How the C++ dependency is being removed. |
-| [docs/native.md](docs/native.md) | Whether to leave the virtual machine, and why not yet. |
-| [CHANGELOG.md](CHANGELOG.md) | What changed, and what it breaks. |
-| [selfhost/README.md](selfhost/README.md) | The compiler written in Red, and how to bootstrap it. |
-
-## Known limits
-
-- Two tasks do not compute at the same time. One lock guards the heap.
-  What tasks buy is waiting in parallel, not computing in parallel.
-  [Why](docs/design.md#concurrency).
-- The collector stops the world and does not move objects.
-- Type checking is one pass deep. A literal that cannot fit its
-  annotation is caught while compiling; everything else is caught when
-  the value arrives. [Why](docs/language.md#types).
-- Code that builds many distinct strings is still the slowest thing here,
-  though less so than it was.
-- A task that is never joined is kept alive until the program ends.
-- An instance is a map key by identity, not by value. A class can define
-  `eq()` for `==`, but not how it hashes, because the table cannot call
-  back into Red while it is probing.
-  [Why](docs/language.md#str-and-eq).
-- Regular expressions have no backreferences and no lookaround, which is
-  the price of never taking exponentially long.
-  [Why](docs/stdlib.md#regular-expressions).
-- POSIX only. It builds on macOS and Linux; there is no Windows port.
-- The language server knows nothing about types and does not follow a
-  name into another file. Both want a syntax tree, and the compiler
-  throws one away as it goes.
-- `red fmt` re-indents and re-spaces but does not re-wrap, so alignment
-  inside a long expression is not preserved.
-- The virtual machine, the collector and the standard library are still
-  C++. Only the compiler is self-hosted.
-- There is no package manager. A library is installed by copying it onto
+- It supports macOS and Linux, but not Windows.
+- Collection is stop-the-world and objects are not moved.
+- The type checker is one pass deep; values are checked again when they arrive.
+- Regular expressions omit backreferences and lookaround so matching cannot
+  take exponentially long.
+- The language server does not yet understand types or follow names across
+  files.
+- The virtual machine, collector, and standard library are still in C++.
+- There is no package manager; libraries are installed by copying them onto
   the search path.
 
-## Licence
+## The logo
+
+The red panda mascot is a high-resolution PNG with a transparent outer
+background. It is suitable for README art, documentation, app icons, and
+other uses where the logo needs to scale down cleanly:
+
+- [`assets/red-panda-logo.png`](assets/red-panda-logo.png) is the 1254 × 1254 source asset.
+- [`assets/red-panda-logo-512.png`](assets/red-panda-logo-512.png) is the large app/icon export.
+- [`assets/red-panda-logo-128.png`](assets/red-panda-logo-128.png) is the small app/icon export.
+- [`assets/red-panda-logo-64.png`](assets/red-panda-logo-64.png) is the favicon-sized export.
+
+## License
 
 See [LICENSE.md](LICENSE.md).

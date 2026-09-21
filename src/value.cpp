@@ -104,20 +104,29 @@ std::string objectString(Obj* obj, bool quoteStrings, int depth) {
       return stringify(((ObjBoundMethod*)obj)->method, quoteStrings, depth);
     case ObjType::Array: {
       if (depth >= kMaxPrintDepth) return "[...]";
-      ObjArray* a = (ObjArray*)obj;
+      std::vector<Value> items;
+      {
+        ObjLock guard(obj);
+        items = ((ObjArray*)obj)->items;
+      }
       std::string out = "[";
-      for (size_t i = 0; i < a->items.size(); i++) {
+      for (size_t i = 0; i < items.size(); i++) {
         if (i > 0) out += ", ";
-        out += stringify(a->items[i], true, depth + 1);
+        out += stringify(items[i], true, depth + 1);
       }
       return out + "]";
     }
     case ObjType::Map: {
       if (depth >= kMaxPrintDepth) return "{...}";
-      ObjMap* m = (ObjMap*)obj;
+      std::vector<ValueEntry> entries;
+      {
+        ObjLock guard(obj);
+        const std::vector<ValueEntry>& slots = ((ObjMap*)obj)->entries.slots();
+        entries.assign(slots.begin(), slots.end());
+      }
       std::string out = "{";
       bool first = true;
-      for (const ValueEntry& slot : m->entries.slots()) {
+      for (const ValueEntry& slot : entries) {
         if (!slot.used || slot.tombstone) continue;
         if (!first) out += ", ";
         first = false;
@@ -129,12 +138,17 @@ std::string objectString(Obj* obj, bool quoteStrings, int depth) {
     }
     case ObjType::Set: {
       if (depth >= kMaxPrintDepth) return "set(...)";
-      ObjSet* set = (ObjSet*)obj;
+      std::vector<ValueEntry> entries;
+      {
+        ObjLock guard(obj);
+        const std::vector<ValueEntry>& slots = ((ObjSet*)obj)->entries.slots();
+        entries.assign(slots.begin(), slots.end());
+      }
       // Printed as a call rather than in braces, so that it can never be
       // mistaken for a map.
       std::string out = "set(";
       bool first = true;
-      for (const ValueEntry& slot : set->entries.slots()) {
+      for (const ValueEntry& slot : entries) {
         if (!slot.used || slot.tombstone) continue;
         if (!first) out += ", ";
         first = false;

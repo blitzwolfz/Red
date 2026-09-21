@@ -6,7 +6,19 @@
 //
 // ValueMap is keyed by arbitrary Red values and backs the map type that
 // user code sees.
+//
+// Both are read far more often than they are written: a global lookup
+// and a method call each go through one on every occurrence. So once
+// more than one thread is running, a lookup takes no lock at all. It
+// reads a counter either side of the probe, and retries if a writer
+// moved it in between. Writers take a small lock and move the counter,
+// and a resize keeps the old array rather than freeing it, because a
+// reader may still be walking it. The kept arrays go when the collector
+// next stops the world, which is the one moment no thread can be inside
+// a lookup.
 #pragma once
+
+#include <atomic>
 
 #include "common.h"
 #include "value.h"
@@ -45,12 +57,48 @@ class Table {
   int capacity() const { return capacity_; }
   int count() const { return count_; }
 
+  // Frees the arrays that resizes replaced. Only safe with the world
+  // stopped, which is where the collector calls it from.
+  static void releaseRetiredArrays();
+
  private:
   int count_ = 0;
   int capacity_ = 0;
   Entry* entries_ = nullptr;
+  // Even when the table is settled, odd while a writer is inside it. A
+  // reader that sees the same even number either side of its probe saw a
+  // table nobody was changing.
+  mutable std::atomic<uint32_t> version_{0};
+  // Held by writers, so that two of them do not interleave. A plain flag
+  // rather than a mutex: it is held for the length of a probe, and every
+  // instance carries one of these tables.
+  mutable std::atomic_flag writing_ = ATOMIC_FLAG_INIT;
 
   void adjustCapacity(int capacity);
+
+  // Marks the table as being written for as long as the guard lives.
+  // Does nothing at all until a second thread exists.
+  class Writing {
+   public:
+    explicit Writing(const Table& table) : table_(table) {
+      if (!runningInParallel()) return;
+      held_ = true;
+      while (table_.writing_.test_and_set(std::memory_order_acquire)) {
+      }
+      table_.version_.fetch_add(1, std::memory_order_release);
+    }
+    ~Writing() {
+      if (!held_) return;
+      table_.version_.fetch_add(1, std::memory_order_release);
+      table_.writing_.clear(std::memory_order_release);
+    }
+    Writing(const Writing&) = delete;
+    Writing& operator=(const Writing&) = delete;
+
+   private:
+    const Table& table_;
+    bool held_ = false;
+  };
 };
 
 struct ValueEntry {

@@ -10,6 +10,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(RED_SANITIZE "Build with the address and undefined behaviour sanitizers" OFF)
+option(RED_SANITIZE_THREAD "Build with the thread sanitizer" OFF)
 
 add_executable(red
   src/main.cpp
@@ -20,6 +21,7 @@ add_executable(red
   src/debugger.cpp
   src/format.cpp
   src/runtime.cpp
+  src/objlock.cpp
   src/regex.cpp
   src/scanner.cpp
   src/serialize.cpp
@@ -53,6 +55,13 @@ target_link_libraries(red PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 if(RED_SANITIZE)
   target_compile_options(red PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)
   target_link_options(red PRIVATE -fsanitize=address,undefined)
+endif()
+
+# Separate from the one above, because the two cannot be combined. This
+# is what the parallel tests are run under.
+if(RED_SANITIZE_THREAD)
+  target_compile_options(red PRIVATE -fsanitize=thread -fno-omit-frame-pointer -g)
+  target_link_options(red PRIVATE -fsanitize=thread)
 endif()
 
 # ---------------------------------------------------------------------

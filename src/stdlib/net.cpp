@@ -1,6 +1,6 @@
 // TCP sockets.
 //
-// Every call that can block releases the runtime lock first. Nothing on
+// Every call that can block parks first. Nothing on
 // the heap is touched while it is released.
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -66,7 +66,7 @@ Value nativeTcpConnect(VM& vm, int, Value* args) {
   hints.ai_socktype = SOCK_STREAM;
 
   struct addrinfo* results = nullptr;
-  vm.releaseLock();
+  vm.park();
   int status = ::getaddrinfo(host.c_str(), port.c_str(), &hints, &results);
   int fd = -1;
   int savedErrno = 0;
@@ -81,7 +81,7 @@ Value nativeTcpConnect(VM& vm, int, Value* args) {
     }
     ::freeaddrinfo(results);
   }
-  vm.acquireLock();
+  vm.unpark();
 
   if (status != 0) {
     return vm.failAs("net", "tcp_connect() could not resolve '%s': %s", host.c_str(),
@@ -108,10 +108,10 @@ Value socketAccept(VM& vm, int, Value* args) {
   if (!server->listening) return vm.failAs("net", "accept() on a client socket.");
 
   int fd = server->fd;
-  vm.releaseLock();
+  vm.park();
   int client = ::accept(fd, nullptr, nullptr);
   int savedErrno = errno;
-  vm.acquireLock();
+  vm.unpark();
 
   if (client < 0) {
     return vm.failAs("net", "accept() failed: %s", std::strerror(savedErrno));
@@ -134,10 +134,10 @@ Value socketRead(VM& vm, int argCount, Value* args) {
   std::string buffer;
   buffer.resize(limit);
   int fd = socket->fd;
-  vm.releaseLock();
+  vm.park();
   ssize_t got = ::recv(fd, &buffer[0], limit, 0);
   int savedErrno = errno;
-  vm.acquireLock();
+  vm.unpark();
 
   if (got < 0) return vm.failAs("net", "read() failed: %s", std::strerror(savedErrno));
   // Zero bytes means the peer closed its side, reported as nil so a read
@@ -154,7 +154,7 @@ Value socketWrite(VM& vm, int argCount, Value* args) {
   for (int i = 1; i < argCount; i++) text += valueToString(args[i]);
 
   int fd = socket->fd;
-  vm.releaseLock();
+  vm.park();
   size_t sent = 0;
   int savedErrno = 0;
   while (sent < text.size()) {
@@ -165,7 +165,7 @@ Value socketWrite(VM& vm, int argCount, Value* args) {
     }
     sent += (size_t)wrote;
   }
-  vm.acquireLock();
+  vm.unpark();
 
   if (sent < text.size()) {
     return vm.failAs("net", "write() failed after %zu bytes: %s", sent,

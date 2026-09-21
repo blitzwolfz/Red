@@ -272,9 +272,9 @@ Value nativeRun(VM& vm, int argCount, Value* args) {
 
   // Another program can take as long as it likes, so the heap is left to
   // the other tasks while this one waits.
-  vm.releaseLock();
+  vm.park();
   Result result = spawnAndWait(argv, input);
-  vm.acquireLock();
+  vm.unpark();
 
   if (!result.failure.empty()) {
     return vm.failAs("process", "run() could not start '%s': %s",
@@ -304,9 +304,9 @@ Value nativeShell(VM& vm, int argCount, Value* args) {
   }
 
   std::vector<std::string> argv = {"/bin/sh", "-c", command};
-  vm.releaseLock();
+  vm.park();
   Result result = spawnAndWait(argv, input);
-  vm.acquireLock();
+  vm.unpark();
 
   if (!result.failure.empty()) {
     return vm.failAs("process", "shell() could not start /bin/sh: %s",

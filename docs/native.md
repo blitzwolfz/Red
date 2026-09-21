@@ -120,9 +120,9 @@ that turns a weekend prototype into a year.
 until the slot dies and the value is moved to the heap. That protocol is
 woven through the call and return paths.
 
-**Tasks are operating system threads sharing one lock.** Native code has
-to take and release that lock at the same points the interpreter does,
-and has to be interruptible where the interpreter is.
+**Tasks are operating system threads sharing a heap, not an interpreter
+lock.** Native code must not mutate Red aggregates without their runtime
+guard, and should park around blocking work so collection can proceed.
 
 **Extensions are already compiled.** The FFI hands out raw `RedValue`s
 with a fixed layout. Changing the value representation — which is the one

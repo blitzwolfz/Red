@@ -916,9 +916,10 @@ fun worker(jobs, results) {
 Channel methods: `send` `recv` `try_recv` `close` `len` `is_closed`.
 Task methods: `join` `is_done`.
 
-Tasks share one heap and one lock. Two tasks do not compute at the same
-time, but a task that waits on a channel or on input and output releases
-the lock. [docs/design.md](design.md#concurrency) explains why.
+Tasks share one heap and can compute at the same time. A task's stack is
+private; operations on the same mutable value are serialised so that an
+array, map, set, class, or instance is never observed half changed.
+[docs/design.md](design.md#concurrency) explains collection and sharing.
 
 ## Running v1 code
 

@@ -640,15 +640,13 @@ $ echo $?
 74
 ```
 
-Now the part that disappoints people. **Two tasks do not compute at the
-same time.** One lock guards the heap, and a task holds it the whole time
-it is running bytecode.
-
-What you get is parallel *waiting*. A task drops the lock before anything
-that blocks, so reading ten files overlaps ten waits on the disk and a
-server handles many connections at once. Parsing those ten files, though,
-takes exactly as long as parsing them one after another.
-[design.md](design.md#concurrency) explains why it was built this way.
+Tasks can compute at the same time. Each task has its own VM stack and
+allocation state; shared values are guarded only while an operation reads
+or changes them. Reading ten files can overlap both the waits and the
+parsing work. If several tasks repeatedly mutate one array or map, that
+single value becomes the point of contention, so prefer channels or
+per-task results followed by a merge. [design.md](design.md#concurrency)
+explains the collector and sharing rules.
 
 Channels are how tasks that are not simply joined talk to each other:
 

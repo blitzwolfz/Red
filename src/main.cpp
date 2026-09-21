@@ -260,8 +260,6 @@ int disassembleScript(Runtime& runtime, const std::string& path) {
     std::fprintf(stderr, "Cannot open '%s'.\n", path.c_str());
     return kExitUsage;
   }
-
-  std::lock_guard<std::mutex> guard(runtime.lock);
   ObjModule* module = makeModule(runtime, resolved, "main");
 
   ObjFunction* function;
@@ -299,10 +297,7 @@ int runBundled(Runtime& runtime, const std::string& executable,
   // the file system, under the paths the build recorded.
   runtime.bundle = &bundle;
 
-  {
-    std::lock_guard<std::mutex> guard(runtime.lock);
-    installBuiltins(runtime);
-  }
+  installBuiltins(runtime);
 
   VM vm(runtime);
   vm.attach();
@@ -443,8 +438,6 @@ int buildExecutable(Runtime& runtime, const std::string& path,
     return kExitUsage;
   }
 
-  std::lock_guard<std::mutex> guard(runtime.lock);
-
   Bundle bundle;
   std::vector<std::string> queue{resolved};
   std::vector<std::string> seen;
@@ -509,8 +502,6 @@ int compileToFile(Runtime& runtime, const std::string& path,
     std::fprintf(stderr, "'%s' is already compiled.\n", path.c_str());
     return kExitUsage;
   }
-
-  std::lock_guard<std::mutex> guard(runtime.lock);
   std::string name = path.substr(path.find_last_of('/') + 1);
   size_t dot = name.find_last_of('.');
   if (dot != std::string::npos) name = name.substr(0, dot);
@@ -1058,10 +1049,7 @@ int main(int argc, const char* argv[]) {
         return kExitUsage;
       }
     }
-    {
-      std::lock_guard<std::mutex> guard(runtime.lock);
-      installBuiltins(runtime);
-    }
+    installBuiltins(runtime);
     return runTests(directory, options);
   }
 
@@ -1091,10 +1079,7 @@ int main(int argc, const char* argv[]) {
     }
   }
 
-  {
-    std::lock_guard<std::mutex> guard(runtime.lock);
-    installBuiltins(runtime);
-  }
+  installBuiltins(runtime);
 
   if (positional.empty()) return runRepl(runtime);
 

@@ -1,10 +1,11 @@
 // The stack machine that executes compiled chunks.
 //
-// One VM per task. Every VM shares a Runtime, and only the VM currently
-// holding the runtime lock may touch the heap.
+// One VM per task, on its own thread, all of them running at once. The
+// value stack, the call frames and the open upvalues belong to one VM
+// and need no agreement with anyone. What is shared is the heap, and
+// runtime.h describes how.
 #pragma once
 
-#include <mutex>
 #include <string>
 
 #include "common.h"
@@ -45,8 +46,7 @@ class VM {
   VM(const VM&) = delete;
   VM& operator=(const VM&) = delete;
 
-  // Compiles source into module and runs it. The caller must already hold
-  // the runtime lock.
+  // Compiles source into module and runs it.
   InterpretResult interpret(const std::string& source, ObjModule* module);
   // Runs an already compiled top level function.
   InterpretResult runFunction(ObjFunction* function);
@@ -109,15 +109,16 @@ class VM {
 
  public:
 
-  // The lock guard this task holds while running. Natives that block must
-  // release it, and must not touch the heap while it is released.
-  std::unique_lock<std::mutex>& lock() { return lock_; }
-  void acquireLock();
-  void releaseLock();
-  // Takes the lock and joins the collector's root set. Called once, when
-  // the task that owns this VM starts.
-  void attach();
-  // Leaves the root set and drops the lock. Called once, at task exit.
+  // Parks this task around something that blocks, so that the collector
+  // does not have to wait for it. Nothing between the two may touch the
+  // heap, because a collection can run in the gap.
+  void park() { runtime_.park(); }
+  void unpark() { runtime_.unpark(); }
+  // Joins the collector's root set. Called once, when the task that owns
+  // this VM starts. `thread` is the entry the spawning task made, or
+  // nullptr to make one here.
+  void attach(Thread* thread = nullptr);
+  // Leaves the root set. Called once, at task exit.
   void detach();
 
   // Roots the collector needs from this task.
@@ -129,7 +130,10 @@ class VM {
 
  private:
   Runtime& runtime_;
-  std::unique_lock<std::mutex> lock_;
+  Thread* thread_ = nullptr;
+  // Whether detach() should take the entry down, or whether it belongs
+  // to something longer lived.
+  bool ownsThread_ = false;
 
   Value* stack_ = nullptr;
   Value* stackTop_ = nullptr;

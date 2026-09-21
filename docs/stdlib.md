@@ -403,8 +403,8 @@ shell("echo " + untrusted);      // whatever the shell makes of it
 ```
 
 `shell` is for when a pipeline, a glob or a redirection is what was
-actually wanted. The runtime lock is released while either waits, so
-other tasks keep running.
+actually wanted. The calling task parks while either waits, so collection
+and other tasks can keep running.
 
 A program that cannot be started at all raises an error with kind
 `"process"`, which is different from one that started and exited
@@ -431,8 +431,8 @@ Socket methods:
 | `port()` | The port this socket is bound to. |
 | `fd()` | The underlying file descriptor. |
 
-Every call that can wait releases the runtime lock first, so other tasks
-keep running.
+Every call that can wait parks the calling task first, so collection and
+other tasks keep running.
 
 ## Extensions
 

@@ -1,6 +1,7 @@
 // Shared includes and small helpers used across the whole runtime.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
@@ -28,5 +29,19 @@ constexpr int kMaxFrames = 1024;
 // slotCount against what is left, which is what actually keeps pushes
 // inside this buffer.
 constexpr int kMaxStack = 65536;
+
+// True once more than one thread runs Red code. It is set before the
+// first task's thread starts and never cleared, so a relaxed load is all
+// any reader needs.
+//
+// Everything that has to agree between threads is guarded, and every one
+// of those guards is skipped while this is false. That is what keeps a
+// program with no tasks in it from paying for the ability to have them:
+// a lookup in a table costs one predictable branch more than it did, and
+// nothing else.
+extern std::atomic<bool> gParallel;
+inline bool runningInParallel() {
+  return gParallel.load(std::memory_order_relaxed);
+}
 
 }  // namespace red

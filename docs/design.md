@@ -211,50 +211,29 @@ A task is an operating system thread. Each task has its own `VM` with its
 own value stack and its own call frames. All tasks share one `Runtime`,
 which owns the heap.
 
-**One global lock.** A task holds the runtime lock while it runs
-bytecode. This is the same shape as CPython's global interpreter lock, and
-it has the same consequence: two tasks doing pure computation do not run
-at the same time.
+**No global interpreter lock.** Tasks run bytecode concurrently. Their
+value stacks, call frames, temporary collector roots, and allocation lists
+belong to one task, so ordinary execution does not require agreement with
+another task. Shared mutable aggregates use re-entrant per-object locks;
+shared runtime tables use their own small guards. Two tasks mutating the
+same array, map, set, class, or instance serialise only that operation.
 
-This was a deliberate trade, and it is the choice in this project that
-most deserves an argument.
+**Collection stops the world at safepoints.** Allocation, calls, and
+backward jumps poll for a pending collection. A task parks at the next
+such point, with a stable stack, and the collector scans every parked VM.
+Tasks also park while blocked on a channel, timer, socket, process, or
+contended runtime guard. Once all tasks are parked, marking and sweeping
+run without a write barrier; then every task resumes.
 
-The alternative is a per-object or per-region lock with a collector that
-can run while other tasks mutate the heap. That needs either a stop the
-world handshake at safepoints, or a concurrent collector with barriers.
-Both are large, and both fail in ways that only show up under load. With
-one lock, the rule is simple enough to state in one line: *the collector
-runs only while the lock is held, so any task that is not holding it has a
-stack that is not moving and can be scanned safely.*
+**Channels.** Channels and task completion state share a small mutex and
+condition variable. That mutex covers only queue and completion updates,
+never bytecode execution. A channel with capacity zero is unbuffered: the
+sender waits until a receiver takes the value. Values queued in a channel
+are roots while the world is stopped.
 
-**Where it still helps.** A task releases the lock before anything that
-blocks:
-
-- waiting on a channel
-- sleeping
-- reading from a socket, accepting a connection, connecting
-- reading a line from the terminal
-- running a legacy script
-
-So tasks overlap on input and output, and on waiting for each other. They
-do not overlap on computation. The echo server example is genuinely
-concurrent, because its tasks spend their time in `accept` and `read`.
-The word count example splits work across tasks but will not run four
-times faster on four cores.
-
-**Channels.** A channel is a bounded queue guarded by the runtime lock,
-with a condition variable over that same lock. A task that waits releases
-the lock, which lets other tasks and the collector run. A channel with
-capacity zero is unbuffered: the sender waits until a receiver takes the
-value.
-
-Because channel state is guarded by the runtime lock and not a private
-mutex, the collector can read a channel's buffer directly while marking.
-Values parked in a channel are live, and this is how they stay live.
-
-**What would come next.** Green threads on a scheduler, with the current
-channel shape kept. That would show stack switching and scheduling, and
-would remove the thread per task cost. It would not fix the lock.
+The collector is still non-moving and stop-the-world. Long native code
+that neither allocates nor returns delays a collection; native extensions
+should arrange to park around blocking work.
 
 ## Error handling
 

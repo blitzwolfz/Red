@@ -81,9 +81,9 @@ Value nativeLegacy(VM& vm, int, Value* args) {
   // The child writes straight to our stdout, so flush first to keep the
   // output in order.
   std::fflush(stdout);
-  vm.releaseLock();
+  vm.park();
   int status = std::system(command.c_str());
-  vm.acquireLock();
+  vm.unpark();
 
   if (status == -1) return vm.failAs("legacy", "legacy() could not start a process.");
   return numberValue((double)((status >> 8) & 0xff));
@@ -106,7 +106,7 @@ Value nativeLegacyOutput(VM& vm, int, Value* args) {
   }
 
   std::string output;
-  vm.releaseLock();
+  vm.park();
   FILE* pipe = ::popen(command.c_str(), "r");
   if (pipe != nullptr) {
     char buffer[4096];
@@ -116,7 +116,7 @@ Value nativeLegacyOutput(VM& vm, int, Value* args) {
     }
     ::pclose(pipe);
   }
-  vm.acquireLock();
+  vm.unpark();
 
   if (pipe == nullptr) return vm.failAs("legacy", "legacy_output() could not start java.");
   return objValue((Obj*)vm.runtime().copyString(output.data(), output.size()));

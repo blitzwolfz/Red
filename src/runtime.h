@@ -1,10 +1,18 @@
 // The Runtime owns everything that is shared between tasks: the heap, the
-// string interner, the module cache, and the lock that serialises access
-// to all of it.
+// string interner and the module cache.
 //
-// One Runtime exists per process. One VM exists per task.
+// One Runtime exists per process. One VM exists per task, on its own
+// thread, and they run at the same time. Nothing serialises them while
+// they are executing bytecode.
+//
+// What that costs is described in docs/design.md under Concurrency. In
+// short: allocation is thread local, the collector stops the world at
+// safepoints the threads poll, and the shared tables are guarded. A
+// program that never spawns a task pays for none of it, because the
+// guards are skipped until a second thread exists.
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <string>
@@ -19,6 +27,25 @@ namespace red {
 
 class VM;
 
+// One per thread that runs Red code.
+//
+// The heap is shared, but each thread allocates onto a list of its own,
+// so making an object needs no agreement with anyone. The collector
+// walks every list once the world has stopped.
+struct Thread {
+  Obj* objects = nullptr;
+  // What this thread has allocated and not yet folded into the shared
+  // total, and what it has allocated altogether.
+  size_t bytesAllocated = 0;
+  size_t sinceRollup = 0;
+  // Objects held only by a C++ local. See GCRoot.
+  std::vector<Obj*> tempRoots;
+  VM* vm = nullptr;
+  // False while this thread is running bytecode and its stack is
+  // moving. True where the collector may scan it.
+  std::atomic<bool> parked{false};
+};
+
 class Runtime {
  public:
   Runtime();
@@ -26,12 +53,71 @@ class Runtime {
   Runtime(const Runtime&) = delete;
   Runtime& operator=(const Runtime&) = delete;
 
-  // Held by whichever task is running bytecode. A task releases it before
-  // any call that can block, and reacquires it afterwards. The collector
-  // only ever runs while it is held, so a task that is not holding it has
-  // a stack that is not moving and can be scanned safely.
+  // Woken when a task finishes, for join().
   std::mutex lock;
   std::condition_variable cond;
+
+  // ---- threads and safepoints -------------------------------------
+  //
+  // The collector needs every thread's stack to be still while it
+  // scans. Rather than a lock held across all of execution, each thread
+  // parks itself at a point where its stack is in a state the collector
+  // understands, and the collector waits for all of them.
+  //
+  // A thread parks at a safepoint, which it polls at every allocation,
+  // every backward jump and every call, so a running thread always
+  // reaches one soon. It also parks around anything that blocks, since
+  // a thread waiting on a socket has a stack that is not moving anyway.
+
+  // Registers the calling thread. Its objects, its temporary roots and
+  // its parked flag live in the entry this returns.
+  Thread* attachThread(VM* vm);
+  // Makes an entry for a thread that has not started yet, from the
+  // thread that is about to start it. Registering it before the new
+  // thread runs is what stops a collection from beginning in the gap
+  // and finding a thread it does not know about.
+  Thread* newThread();
+  // Called by that thread once it is running, with its VM.
+  void adoptThread(Thread* thread, VM* vm);
+  void detachThread(Thread* thread);
+  // Takes a VM off a thread that outlives it, under the same lock the
+  // collector's view of the threads is kept consistent by.
+  void clearThreadVM(Thread* thread, VM* vm);
+  // The calling thread's entry.
+  static Thread* currentThread();
+  // The runtime attached to the calling thread. This is primarily for
+  // helpers such as the value printer that receive an object but not a
+  // VM and still need its aggregate guard.
+  static Runtime* current();
+
+  // Parks if the collector is waiting. Cheap enough for a hot loop: one
+  // relaxed load of a flag that is almost never set.
+  void safepoint() {
+    if (gcPending.load(std::memory_order_relaxed)) reachSafepoint();
+  }
+  // Parks for the duration of something that blocks. The caller must not
+  // touch the heap in between, because the collector may run.
+  void park();
+  void unpark();
+
+  // Takes a mutex that another thread may be holding while parked for a
+  // collection.
+  //
+  // Waiting for such a mutex without parking is what deadlocks: the
+  // collector waits for this thread to reach a safepoint, this thread
+  // waits for a mutex held by a thread that is already parked, and the
+  // collection that would release it never starts. Parking first makes
+  // this thread one the collector can go ahead without.
+  void lockParked(std::mutex& mutex);
+
+  // True once a second thread has run Red code. It is set before the
+  // first task's thread starts and never cleared, so the guards that
+  // read it never need to be more than a relaxed load.
+  //
+  // This is what keeps an ordinary program free of the cost of being
+  // able to run in parallel.
+  static bool parallel() { return runningInParallel(); }
+  static void becomeParallel();
 
   // ---- allocation -------------------------------------------------
   // Makes a string. Short ones are shared through the interner, because
@@ -46,6 +132,12 @@ class Runtime {
   // and over: identifiers, method names, module paths.
   ObjString* internString(const std::string& text);
   ObjString* internString(const char* chars, size_t length);
+  // Counts memory that hangs off an object rather than being the object:
+  // a string's characters, a closure's upvalue array. It goes on the
+  // allocating thread's total, because that is the total the sweep takes
+  // it off again.
+  void noteBytes(size_t bytes);
+
   // Takes ownership of a buffer that was allocated with new char[].
   ObjString* takeString(char* chars, size_t length);
 
@@ -88,20 +180,24 @@ class Runtime {
   void pushRoot(Obj* obj);
   void popRoot();
 
-  void registerVM(VM* vm);
-  void unregisterVM(VM* vm);
-
   // A running task is a root even when no live value refers to it. Its
   // thread is still using the task object, so the collector must not free
   // it. The entry is dropped once the task finishes and is joined.
   void registerTask(ObjTask* task);
   void retireTask(ObjTask* task);
-  // Waits for every task that was never joined. Called once at shutdown,
-  // by a thread that does not hold the runtime lock.
+  // Waits for every task that was never joined. Called once at shutdown.
   void joinAllTasks();
+  // Joins one task's thread, if nobody else has. Safe to call from
+  // several places at once, and from the collector.
+  void reapTask(ObjTask* task);
 
   // ---- shared state -----------------------------------------------
-  Table strings;   // interner, weak: entries die with their string
+  // The interner. Weak: entries die with their string. Guarded by
+  // internMutex_ rather than by the seqlock every other table uses,
+  // because looking a string up and putting it there have to be one
+  // step: two threads that each made a string for the same text would
+  // break the pointer comparison that keys everything else.
+  Table strings;
   Table modules;   // absolute path -> ObjModule
   // Names visible from every module. A global lookup checks the current
   // module first and falls back to this table.
@@ -143,22 +239,51 @@ class Runtime {
   bool logGC = false;
   bool stressGC = false;
 
-  size_t bytesAllocated = 0;
+  // Totalled across the threads. Each thread counts what it allocates
+  // and folds the total in occasionally, so an allocation costs a plain
+  // add rather than an atomic one.
+  std::atomic<size_t> bytesAllocated{0};
   size_t nextGC = 1024 * 1024;
   size_t collections = 0;
   size_t peakBytes = 0;
 
  private:
+  // Guards the interner for the length of a lookup and the insert that
+  // follows it.
+  class InternLock {
+   public:
+    explicit InternLock(Runtime& rt);
+    ~InternLock();
+    InternLock(const InternLock&) = delete;
+    InternLock& operator=(const InternLock&) = delete;
+
+   private:
+    Runtime& rt_;
+    bool held_ = false;
+  };
+
+  // Set while a collection is waiting for the threads to park.
+  std::atomic<bool> gcPending{false};
+  std::mutex internMutex_;
+  std::mutex worldMutex_;
+  std::condition_variable worldCond_;
+  std::vector<Thread*> threads_;
+
+  void reachSafepoint();
+  // Parks the caller and waits for every other thread to park. The
+  // caller holds worldMutex_ and keeps holding it, so the world stays
+  // stopped until startWorld() lets it go.
+  void stopWorld(std::unique_lock<std::mutex>& guard);
+  void startWorld();
+
   // Builds the object around a buffer this runtime now owns, and puts it
   // in the interner when `share` says to.
   ObjString* allocateString(char* chars, size_t length, uint32_t hash,
                             bool share);
 
-  Obj* objects_ = nullptr;
   std::vector<Obj*> grayStack_;
-  std::vector<Obj*> tempRoots_;
-  std::vector<VM*> vms_;
   std::vector<ObjTask*> liveTasks_;
+  Thread* mainThread_ = nullptr;
   // Set while the collector is running so that allocations made by the
   // collector itself cannot re-enter it.
   bool collecting_ = false;
@@ -167,7 +292,8 @@ class Runtime {
   void traceReferences();
   void blackenObject(Obj* obj);
   void sweep();
-  void freeObject(Obj* obj);
+  // Returns how many bytes it gave back.
+  size_t freeObject(Obj* obj);
 
   friend class VM;
 };
@@ -178,6 +304,7 @@ class Runtime {
 class GCRoot {
  public:
   GCRoot(Runtime& rt, Obj* obj) : rt_(rt) { rt_.pushRoot(obj); }
+
   GCRoot(Runtime& rt, Value v) : rt_(rt) {
     rt_.pushRoot(isObj(v) ? asObj(v) : nullptr);
   }

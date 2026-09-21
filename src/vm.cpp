@@ -22,10 +22,9 @@ const char* plural(int count) { return count == 1 ? "" : "s"; }
 
 // Entry point for a spawned task. Runs on its own thread with its own VM
 // and its own value stack, sharing the heap with everyone else.
-void taskMain(Runtime* runtime, ObjTask* task) {
+void taskMain(Runtime* runtime, ObjTask* task, Thread* thread) {
   VM vm(*runtime);
-  vm.attach();
-  task->vm = &vm;
+  vm.attach(thread);
 
   // Rebuild the call on this task's own stack: callee first, then its
   // arguments, exactly as a normal call site would leave them.
@@ -36,24 +35,33 @@ void taskMain(Runtime* runtime, ObjTask* task) {
   InterpretResult status =
       vm.callAndRun(task->callee, (int)task->args.size(), &result);
 
-  task->result = result;
-  task->failed = status != InterpretResult::Ok;
-  if (task->failed) {
-    // Kept as the error itself, so that join() can raise it again with
-    // its kind and payload intact. The two tasks share one heap, so the
-    // value is as good here as it was there.
-    task->error = vm.lastError;
+  // Completion state is also read by join() and is therefore covered by
+  // the channel/task mutex. It is the last shared state this task writes.
+  // `result` lives in a C++ local until the state below publishes it, so
+  // keep it visible if waiting for the mutex lets a collection run.
+  {
+    GCRoot resultRoot(*runtime, result);
+    runtime->lockParked(runtime->lock);
+    {
+      std::lock_guard<std::mutex> guard(runtime->lock, std::adopt_lock);
+      task->result = result;
+      task->failed = status != InterpretResult::Ok;
+      if (task->failed) {
+        // Kept as the error itself, so that join() can raise it again with
+        // its kind and payload intact. The two tasks share one heap, so the
+        // value is as good here as it was there.
+        task->error = vm.lastError;
+      }
+      task->done = true;
+    }
   }
-  task->vm = nullptr;
-  task->done = true;
   runtime->cond.notify_all();
   vm.detach();
 }
 
 }  // namespace
 
-VM::VM(Runtime& runtime)
-    : runtime_(runtime), lock_(runtime.lock, std::defer_lock) {
+VM::VM(Runtime& runtime) : runtime_(runtime) {
   // One contiguous block per task. Slot pointers are handed out to call
   // frames and to open upvalues, so this must never be reallocated.
   stack_ = new Value[kMaxStack];
@@ -62,19 +70,40 @@ VM::VM(Runtime& runtime)
 
 VM::~VM() { delete[] stack_; }
 
-void VM::attach() {
-  lock_.lock();
-  runtime_.registerVM(this);
+void VM::attach(Thread* thread) {
+  if (thread != nullptr) {
+    // A task: the entry was made by whoever spawned it, and this thread
+    // takes it over now that it is running.
+    thread_ = thread;
+    ownsThread_ = true;
+    runtime_.adoptThread(thread_, this);
+    return;
+  }
+  // The thread that built the Runtime already has an entry, which
+  // outlives every VM on it.
+  thread_ = Runtime::currentThread();
+  if (thread_ == nullptr) {
+    thread_ = runtime_.attachThread(this);
+    ownsThread_ = true;
+    return;
+  }
+  thread_->vm = this;
 }
 
 void VM::detach() {
-  runtime_.unregisterVM(this);
-  lock_.unlock();
+  if (thread_ == nullptr) return;
+  // Detaching takes the same lock, so clearing this from inside it is
+  // what keeps the collector from reading it half way through.
+  if (ownsThread_) {
+    Thread* thread = thread_;
+    thread_ = nullptr;
+    runtime_.detachThread(thread);
+    delete thread;
+    return;
+  }
+  runtime_.clearThreadVM(thread_, this);
+  thread_ = nullptr;
 }
-
-void VM::acquireLock() { lock_.lock(); }
-
-void VM::releaseLock() { lock_.unlock(); }
 
 void VM::push(Value value) { *stackTop_++ = value; }
 
@@ -205,6 +234,10 @@ bool VM::raise(Value value) {
 // calling
 
 bool VM::call(ObjClosure* closure, int argCount) {
+  // The other way a program can run for a long time without allocating
+  // is deep recursion, so a call is a safepoint too. A call already
+  // costs far more than this.
+  runtime_.safepoint();
   ObjFunction* function = closure->function;
   // Remembered before any padding, so the prologue can tell which
   // parameters the call actually supplied.
@@ -584,6 +617,7 @@ bool VM::getIndex() {
       return runtimeErrorAs("type", "Array index must be a number, got %s.",
                             valueTypeName(indexValue));
     }
+    ObjLock guard(runtime_, target);
     ObjArray* array = asArray(target);
     double raw = asNumber(indexValue);
     long index = (long)raw;
@@ -603,6 +637,7 @@ bool VM::getIndex() {
   }
 
   if (isMap(target)) {
+    ObjLock guard(runtime_, target);
     Value result;
     if (!asMap(target)->entries.get(indexValue, &result)) result = nilValue();
     pop();
@@ -645,6 +680,7 @@ bool VM::setIndex() {
       return runtimeErrorAs("type", "Array index must be a number, got %s.",
                             valueTypeName(indexValue));
     }
+    ObjLock guard(runtime_, target);
     ObjArray* array = asArray(target);
     long index = (long)asNumber(indexValue);
     if (index < 0) index += (long)array->items.size();
@@ -662,6 +698,7 @@ bool VM::setIndex() {
           "or instance, got %s.",
           valueTypeName(indexValue));
     }
+    ObjLock guard(runtime_, target);
     asMap(target)->entries.set(indexValue, value);
   } else {
     return runtimeErrorAs("type",
@@ -689,7 +726,14 @@ bool VM::spawnTask(int argCount) {
   stackTop_ -= argCount + 1;
   push(objValue((Obj*)task));
 
-  task->thread = new std::thread(taskMain, &runtime_, task);
+  // From here on more than one thread runs Red code, which is what
+  // turns on the guards around everything shared. It is set before the
+  // thread starts and never cleared.
+  Runtime::becomeParallel();
+  // The entry is made here rather than over there, so that a collection
+  // cannot begin in the gap before the new thread has registered.
+  Thread* worker = runtime_.newThread();
+  task->thread = new std::thread(taskMain, &runtime_, task, worker);
   return true;
 }
 
@@ -1195,6 +1239,12 @@ InterpretResult VM::runLoop(int baseFrame) {
       case OP_LOOP: {
         uint16_t offset = READ_SHORT();
         frame->ip -= offset;
+        // A backward jump is the one thing every loop has to do, so
+        // polling here is what stops a tight loop holding the collector
+        // up. The cost is a relaxed load of a flag that is almost never
+        // set, and only once around the loop rather than once an
+        // instruction.
+        runtime_.safepoint();
         break;
       }
 
@@ -1402,10 +1452,12 @@ InterpretResult VM::runLoop(int baseFrame) {
         uint8_t sequenceSlot = READ_BYTE();
         uint8_t indexSlot = READ_BYTE();
         uint16_t offset = READ_SHORT();
+        ObjLock guard(runtime_, frame->slots[sequenceSlot]);
         ObjArray* sequence = asArray(frame->slots[sequenceSlot]);
         size_t index = (size_t)asNumber(frame->slots[indexSlot]);
         // The length is read every time, so a loop over an array that
         // shrinks underneath it stops rather than reading past the end.
+        // That holds whether it shrank in this task or another one.
         if (index >= sequence->items.size()) {
           frame->ip += offset;
           break;

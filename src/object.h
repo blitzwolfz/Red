@@ -53,7 +53,52 @@ enum class ObjType : uint8_t {
 struct Obj {
   ObjType type;
   bool isMarked;
+  // How many times the thread in `owner` has taken this object's lock
+  // without letting go. See ObjLock below. These two sit in padding the
+  // header already had, so an object is no larger than it was.
+  uint8_t lockDepth;
+  uint8_t unused;
+  std::atomic<uint32_t> owner;
   Obj* next;
+};
+static_assert(sizeof(Obj) == 16, "the object header should stay this size");
+
+// The number this thread puts in Obj::owner. Zero means no thread, so
+// the numbering starts at one.
+uint32_t currentThreadId();
+
+// Holds an aggregate still for as long as the guard lives, so that one
+// thread walking an array cannot see it part way through another
+// thread's push.
+//
+// Nothing at all happens until a second thread exists: an ordinary
+// program pays one predictable branch per operation.
+//
+// The lock is reentrant, because a Red callback inside sort() or map()
+// can reach the same array. Waiting for one another thread holds parks
+// this one now and then, so a thread that is waiting never keeps the
+// collector waiting.
+class ObjLock {
+ public:
+  // Uses the runtime attached to this operating-system thread. This is
+  // for code that only has a Value, such as the general-purpose printer.
+  explicit ObjLock(Obj* object);
+  ObjLock(class Runtime& runtime, Obj* object);
+  ObjLock(class Runtime& runtime, Value value);
+  // Two aggregates at once, taken in address order so that two threads
+  // doing the same thing from opposite sides cannot each hold what the
+  // other wants.
+  ObjLock(class Runtime& runtime, Obj* first, Obj* second);
+  ~ObjLock();
+  ObjLock(const ObjLock&) = delete;
+  ObjLock& operator=(const ObjLock&) = delete;
+
+ private:
+  void take(Obj* object);
+  void release(Obj* object);
+
+  class Runtime* runtime_ = nullptr;
+  Obj* held_[2] = {nullptr, nullptr};
 };
 
 inline bool isObjType(Value v, ObjType t) {
@@ -224,6 +269,11 @@ struct ObjTask {
   bool done;
   bool failed;
   bool joined;
+  // Set by whichever of join(), the shutdown sweep or the collector
+  // gets to the operating system thread first. Exchanged rather than
+  // read and written, because all three can be looking at once and
+  // joining a thread twice is not allowed.
+  std::atomic<bool> reaped;
   // What the task failed with, kept whole so that join() can raise the
   // same error rather than a description of one. Nil when it succeeded.
   Value error;

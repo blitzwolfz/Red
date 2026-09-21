@@ -371,16 +371,16 @@ Value nativeInput(VM& vm, int argCount, Value* args) {
   }
   std::string line;
   int c;
-  // Reading stdin can block, so the runtime lock is dropped first. No heap
-  // access happens while it is released.
-  vm.releaseLock();
+  // Reading stdin can block, so this task parks first and the collector
+  // does not have to wait for it. No heap access happens in between.
+  vm.park();
   bool gotAny = false;
   while ((c = std::fgetc(stdin)) != EOF) {
     gotAny = true;
     if (c == '\n') break;
     line += (char)c;
   }
-  vm.acquireLock();
+  vm.unpark();
   if (!gotAny) return nilValue();
   return objValue((Obj*)vm.runtime().copyString(line.data(), line.size()));
 }
@@ -709,17 +709,20 @@ Value stringRepeat(VM& vm, int, Value* args) {
 
 // ---- array methods --------------------------------------------------
 
-Value arrayLen(VM&, int, Value* args) {
+Value arrayLen(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   return numberValue((double)asArray(args[0])->items.size());
 }
 
-Value arrayPush(VM&, int argCount, Value* args) {
+Value arrayPush(VM& vm, int argCount, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   ObjArray* array = asArray(args[0]);
   for (int i = 1; i < argCount; i++) array->items.push_back(args[i]);
   return args[0];
 }
 
 Value arrayPop(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   ObjArray* array = asArray(args[0]);
   if (array->items.empty()) return vm.fail("pop() on an empty array.");
   Value value = array->items.back();
@@ -728,6 +731,7 @@ Value arrayPop(VM& vm, int, Value* args) {
 }
 
 Value arrayInsert(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   ObjArray* array = asArray(args[0]);
   double indexRaw;
   if (!wantNumber(vm, args[1], "insert()", &indexRaw)) return nilValue();
@@ -741,6 +745,7 @@ Value arrayInsert(VM& vm, int, Value* args) {
 }
 
 Value arrayRemove(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   ObjArray* array = asArray(args[0]);
   double indexRaw;
   if (!wantNumber(vm, args[1], "remove()", &indexRaw)) return nilValue();
@@ -755,6 +760,7 @@ Value arrayRemove(VM& vm, int, Value* args) {
 }
 
 Value arraySlice(VM& vm, int argCount, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   ObjArray* source = asArray(args[0]);
   long size = (long)source->items.size();
   double startRaw;
@@ -781,6 +787,37 @@ Value arraySlice(VM& vm, int argCount, Value* args) {
   return objValue((Obj*)result);
 }
 
+// Reads one element under the array's lock and leaves the callback and
+// that element on the stack, ready to call. Returns false once the index
+// has run past the end, which is looked at again every turn because
+// another task may have changed the array since the last one.
+//
+// The lock is let go of before the callback runs. Holding an aggregate
+// while Red code runs would let two tasks each walking the other's array
+// wait for one another forever, and once the element is on the stack the
+// collector can see it anyway.
+bool takeElement(VM& vm, Value arrayValue, Value callback, size_t index,
+                 Value* element) {
+  ObjLock guard(vm.runtime(), arrayValue);
+  ObjArray* array = asArray(arrayValue);
+  if (index >= array->items.size()) return false;
+  *element = array->items[index];
+  vm.push(callback);
+  vm.push(*element);
+  return true;
+}
+
+// The same for the natives that look at an element without calling back
+// into Red through a callback of their own. They can still re-enter it,
+// through a class's eq() or str().
+bool readElement(VM& vm, Value arrayValue, size_t index, Value* element) {
+  ObjLock guard(vm.runtime(), arrayValue);
+  ObjArray* array = asArray(arrayValue);
+  if (index >= array->items.size()) return false;
+  *element = array->items[index];
+  return true;
+}
+
 Value arrayJoin(VM& vm, int argCount, Value* args) {
   std::string separator;
   if (argCount > 1) {
@@ -788,11 +825,13 @@ Value arrayJoin(VM& vm, int argCount, Value* args) {
     if (!wantString(vm, args[1], "join()", &sep)) return nilValue();
     separator = textOf(sep);
   }
-  ObjArray* array = asArray(args[0]);
   std::string out;
-  for (size_t i = 0; i < array->items.size(); i++) {
+  for (size_t i = 0;; i++) {
+    Value element;
+    if (!readElement(vm, args[0], i, &element)) break;
     if (i > 0) out += separator;
-    out += vm.stringify(array->items[i]);
+    // Outside the lock: a class's str() is Red code.
+    out += vm.stringify(element);
   }
   return objValue((Obj*)vm.runtime().copyString(out.data(), out.size()));
 }
@@ -800,21 +839,56 @@ Value arrayJoin(VM& vm, int argCount, Value* args) {
 // Compares by contents, recursively, unlike == which compares arrays and
 // maps by identity. The depth limit stops a structure that contains
 // itself from running away.
-bool deepEquals(Value a, Value b, int depth) {
+//
+// Each container is copied under its own lock and then let go of before
+// the walk goes any deeper, so only one aggregate is ever held at a
+// time. Two tasks comparing the same pair of structures from opposite
+// sides therefore cannot end up waiting on one another. The copy is a
+// Red array because taking a contended lock can park this task, and a
+// collection in that gap would not see values held only in a C++ local.
+//
+// None of that happens at all until a second thread exists.
+bool deepEquals(Runtime& runtime, Value a, Value b, int depth) {
   if (depth > 64) return false;
   if (valuesEqual(a, b)) return true;
 
   if (isArray(a) && isArray(b)) {
-    const std::vector<Value>& left = asArray(a)->items;
-    const std::vector<Value>& right = asArray(b)->items;
-    if (left.size() != right.size()) return false;
-    for (size_t i = 0; i < left.size(); i++) {
-      if (!deepEquals(left[i], right[i], depth + 1)) return false;
+    if (!runningInParallel()) {
+      const std::vector<Value>& left = asArray(a)->items;
+      const std::vector<Value>& right = asArray(b)->items;
+      if (left.size() != right.size()) return false;
+      for (size_t i = 0; i < left.size(); i++) {
+        if (!deepEquals(runtime, left[i], right[i], depth + 1)) return false;
+      }
+      return true;
+    }
+
+    ObjArray* left = runtime.newArray();
+    GCRoot leftRoot(runtime, (Obj*)left);
+    ObjArray* right = runtime.newArray();
+    GCRoot rightRoot(runtime, (Obj*)right);
+    {
+      ObjLock guard(runtime, a);
+      left->items = asArray(a)->items;
+    }
+    {
+      ObjLock guard(runtime, b);
+      right->items = asArray(b)->items;
+    }
+    if (left->items.size() != right->items.size()) return false;
+    for (size_t i = 0; i < left->items.size(); i++) {
+      if (!deepEquals(runtime, left->items[i], right->items[i], depth + 1)) {
+        return false;
+      }
     }
     return true;
   }
 
   if (isMap(a) && isMap(b)) {
+    // Both sides are read at once here rather than one at a time,
+    // because a map is looked up rather than walked in step. The pair
+    // form takes them in address order.
+    ObjLock guard(runtime, asObj(a), asObj(b));
     ObjMap* left = asMap(a);
     ObjMap* right = asMap(b);
     if (left->entries.count() != right->entries.count()) return false;
@@ -822,7 +896,7 @@ bool deepEquals(Value a, Value b, int depth) {
       if (!slot.used) continue;
       Value other;
       if (!right->entries.get(slot.key, &other)) return false;
-      if (!deepEquals(slot.value, other, depth + 1)) return false;
+      if (!deepEquals(runtime, slot.value, other, depth + 1)) return false;
     }
     return true;
   }
@@ -830,35 +904,39 @@ bool deepEquals(Value a, Value b, int depth) {
   return false;
 }
 
-Value valueEquals(VM&, int, Value* args) {
-  return boolValue(deepEquals(args[0], args[1], 0));
+Value valueEquals(VM& vm, int, Value* args) {
+  return boolValue(deepEquals(vm.runtime(), args[0], args[1], 0));
 }
 
 // Searching uses the same comparison as ==, so a class with an eq() is
 // found by value here too.
 Value arrayContains(VM& vm, int, Value* args) {
-  ObjArray* array = asArray(args[0]);
-  for (size_t i = 0; i < array->items.size(); i++) {
-    if (vm.equal(array->items[i], args[1])) return boolValue(true);
+  for (size_t i = 0;; i++) {
+    Value element;
+    if (!readElement(vm, args[0], i, &element)) break;
+    if (vm.equal(element, args[1])) return boolValue(true);
   }
   return boolValue(false);
 }
 
 Value arrayIndexOf(VM& vm, int, Value* args) {
-  ObjArray* array = asArray(args[0]);
-  for (size_t i = 0; i < array->items.size(); i++) {
-    if (vm.equal(array->items[i], args[1])) return numberValue((double)i);
+  for (size_t i = 0;; i++) {
+    Value element;
+    if (!readElement(vm, args[0], i, &element)) break;
+    if (vm.equal(element, args[1])) return numberValue((double)i);
   }
   return numberValue(-1);
 }
 
-Value arrayReverse(VM&, int, Value* args) {
+Value arrayReverse(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   ObjArray* array = asArray(args[0]);
   std::reverse(array->items.begin(), array->items.end());
   return args[0];
 }
 
-Value arrayClear(VM&, int, Value* args) {
+Value arrayClear(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   asArray(args[0])->items.clear();
   return args[0];
 }
@@ -866,6 +944,9 @@ Value arrayClear(VM&, int, Value* args) {
 Value arraySort(VM& vm, int argCount, Value* args) {
   ObjArray* array = asArray(args[0]);
   if (argCount == 1) {
+    // No callback, so nothing here re-enters the interpreter and the
+    // lock can be held for the whole sort.
+    ObjLock guard(vm.runtime(), args[0]);
     // Default order: numbers before strings, each group ordered naturally.
     bool bad = false;
     std::stable_sort(array->items.begin(), array->items.end(),
@@ -885,12 +966,23 @@ Value arraySort(VM& vm, int argCount, Value* args) {
     return args[0];
   }
 
-  // With a comparator, each comparison re-enters the interpreter. A copy
-  // is sorted so that a comparator that mutates the array cannot corrupt
-  // the sort in progress.
-  std::vector<Value> copy = array->items;
+  // With a comparator, each comparison re-enters the interpreter. The
+  // copy is sorted instead, so that a comparator which changes the array
+  // cannot corrupt the sort that is under way, and so that the lock is
+  // never held while Red code runs.
+  //
+  // The copy is a Red array rather than a plain vector because a
+  // collection can happen inside the comparator, and what is only in a
+  // C++ local is not something the collector can see.
+  ObjArray* copy = vm.runtime().newArray();
+  GCRoot copyRoot(vm.runtime(), (Obj*)copy);
+  {
+    ObjLock guard(vm.runtime(), args[0]);
+    copy->items = array->items;
+  }
   bool failed = false;
-  std::stable_sort(copy.begin(), copy.end(), [&](Value a, Value b) {
+  std::stable_sort(copy->items.begin(), copy->items.end(),
+                   [&](Value a, Value b) {
     if (failed) return false;
     vm.push(args[1]);
     vm.push(a);
@@ -905,19 +997,18 @@ Value arraySort(VM& vm, int argCount, Value* args) {
   if (failed) {
     return vm.fail("sort() comparator failed.");
   }
-  array->items = copy;
+  ObjLock guard(vm.runtime(), args[0]);
+  array->items = copy->items;
   return args[0];
 }
 
 Value arrayMap(VM& vm, int, Value* args) {
-  ObjArray* source = asArray(args[0]);
   ObjArray* result = vm.runtime().newArray();
   GCRoot resultRoot(vm.runtime(), (Obj*)result);
-  result->items.reserve(source->items.size());
 
-  for (size_t i = 0; i < source->items.size(); i++) {
-    vm.push(args[1]);
-    vm.push(source->items[i]);
+  for (size_t i = 0;; i++) {
+    Value element;
+    if (!takeElement(vm, args[0], args[1], i, &element)) break;
     Value mapped = nilValue();
     if (vm.callAndRun(args[1], 1, &mapped) != InterpretResult::Ok) {
       return vm.fail("map() callback failed.");
@@ -928,18 +1019,17 @@ Value arrayMap(VM& vm, int, Value* args) {
 }
 
 Value arrayFilter(VM& vm, int, Value* args) {
-  ObjArray* source = asArray(args[0]);
   ObjArray* result = vm.runtime().newArray();
   GCRoot resultRoot(vm.runtime(), (Obj*)result);
 
-  for (size_t i = 0; i < source->items.size(); i++) {
-    vm.push(args[1]);
-    vm.push(source->items[i]);
+  for (size_t i = 0;; i++) {
+    Value element;
+    if (!takeElement(vm, args[0], args[1], i, &element)) break;
     Value keep = nilValue();
     if (vm.callAndRun(args[1], 1, &keep) != InterpretResult::Ok) {
       return vm.fail("filter() callback failed.");
     }
-    if (!isFalsey(keep)) result->items.push_back(source->items[i]);
+    if (!isFalsey(keep)) result->items.push_back(element);
   }
   return objValue((Obj*)result);
 }
@@ -947,10 +1037,9 @@ Value arrayFilter(VM& vm, int, Value* args) {
 // Stops at the first answer, which is the point of having these rather
 // than filtering and looking at the length.
 Value arrayAny(VM& vm, int, Value* args) {
-  ObjArray* source = asArray(args[0]);
-  for (size_t i = 0; i < source->items.size(); i++) {
-    vm.push(args[1]);
-    vm.push(source->items[i]);
+  for (size_t i = 0;; i++) {
+    Value element;
+    if (!takeElement(vm, args[0], args[1], i, &element)) break;
     Value matched = nilValue();
     if (vm.callAndRun(args[1], 1, &matched) != InterpretResult::Ok) {
       return vm.fail("any() callback failed.");
@@ -961,10 +1050,9 @@ Value arrayAny(VM& vm, int, Value* args) {
 }
 
 Value arrayAll(VM& vm, int, Value* args) {
-  ObjArray* source = asArray(args[0]);
-  for (size_t i = 0; i < source->items.size(); i++) {
-    vm.push(args[1]);
-    vm.push(source->items[i]);
+  for (size_t i = 0;; i++) {
+    Value element;
+    if (!takeElement(vm, args[0], args[1], i, &element)) break;
     Value matched = nilValue();
     if (vm.callAndRun(args[1], 1, &matched) != InterpretResult::Ok) {
       return vm.fail("all() callback failed.");
@@ -977,24 +1065,22 @@ Value arrayAll(VM& vm, int, Value* args) {
 // The first element the test accepts, or nil. find_index() reports where
 // it was, so that nil can be told apart from an element that is nil.
 Value arrayFind(VM& vm, int, Value* args) {
-  ObjArray* source = asArray(args[0]);
-  for (size_t i = 0; i < source->items.size(); i++) {
-    vm.push(args[1]);
-    vm.push(source->items[i]);
+  for (size_t i = 0;; i++) {
+    Value element;
+    if (!takeElement(vm, args[0], args[1], i, &element)) break;
     Value matched = nilValue();
     if (vm.callAndRun(args[1], 1, &matched) != InterpretResult::Ok) {
       return vm.fail("find() callback failed.");
     }
-    if (!isFalsey(matched)) return source->items[i];
+    if (!isFalsey(matched)) return element;
   }
   return nilValue();
 }
 
 Value arrayFindIndex(VM& vm, int, Value* args) {
-  ObjArray* source = asArray(args[0]);
-  for (size_t i = 0; i < source->items.size(); i++) {
-    vm.push(args[1]);
-    vm.push(source->items[i]);
+  for (size_t i = 0;; i++) {
+    Value element;
+    if (!takeElement(vm, args[0], args[1], i, &element)) break;
     Value matched = nilValue();
     if (vm.callAndRun(args[1], 1, &matched) != InterpretResult::Ok) {
       return vm.fail("find_index() callback failed.");
@@ -1005,23 +1091,30 @@ Value arrayFindIndex(VM& vm, int, Value* args) {
 }
 
 Value arrayReduce(VM& vm, int argCount, Value* args) {
-  ObjArray* source = asArray(args[0]);
   size_t start = 0;
   Value accumulator;
   if (argCount > 2) {
     accumulator = args[2];
   } else {
-    if (source->items.empty()) {
+    if (!readElement(vm, args[0], 0, &accumulator)) {
       return vm.fail("reduce() on an empty array needs a starting value.");
     }
-    accumulator = source->items[0];
     start = 1;
   }
 
-  for (size_t i = start; i < source->items.size(); i++) {
-    vm.push(args[1]);
-    vm.push(accumulator);
-    vm.push(source->items[i]);
+  for (size_t i = start;; i++) {
+    Value element;
+    {
+      // The accumulator is only held in a C++ local between turns, so
+      // it goes on the stack before anything can collect.
+      ObjLock guard(vm.runtime(), args[0]);
+      ObjArray* source = asArray(args[0]);
+      if (i >= source->items.size()) break;
+      element = source->items[i];
+      vm.push(args[1]);
+      vm.push(accumulator);
+      vm.push(element);
+    }
     Value next = nilValue();
     if (vm.callAndRun(args[1], 2, &next) != InterpretResult::Ok) {
       return vm.fail("reduce() callback failed.");
@@ -1033,17 +1126,20 @@ Value arrayReduce(VM& vm, int argCount, Value* args) {
 
 // ---- map methods ----------------------------------------------------
 
-Value mapLen(VM&, int, Value* args) {
+Value mapLen(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   return numberValue((double)asMap(args[0])->entries.count());
 }
 
-Value mapGet(VM&, int argCount, Value* args) {
+Value mapGet(VM& vm, int argCount, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   Value value;
   if (asMap(args[0])->entries.get(args[1], &value)) return value;
   return argCount > 2 ? args[2] : nilValue();
 }
 
 Value mapSet(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   if (!isHashableKey(args[1])) {
     // Same kind as the index form, so one catch clause covers both ways
     // of writing it.
@@ -1057,21 +1153,25 @@ Value mapSet(VM& vm, int, Value* args) {
   return args[0];
 }
 
-Value mapHas(VM&, int, Value* args) {
+Value mapHas(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   Value ignored;
   return boolValue(asMap(args[0])->entries.get(args[1], &ignored));
 }
 
-Value mapRemove(VM&, int, Value* args) {
+Value mapRemove(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   return boolValue(asMap(args[0])->entries.remove(args[1]));
 }
 
-Value mapClear(VM&, int, Value* args) {
+Value mapClear(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   asMap(args[0])->entries.clear();
   return args[0];
 }
 
 Value mapKeys(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   ObjArray* keys = vm.runtime().newArray();
   GCRoot keysRoot(vm.runtime(), (Obj*)keys);
   for (const ValueEntry& slot : asMap(args[0])->entries.slots()) {
@@ -1083,6 +1183,7 @@ Value mapKeys(VM& vm, int, Value* args) {
 // Every entry as a two element array, so that a for-in loop can take a
 // key and a value at once with a destructuring pattern.
 Value mapEntries(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   Runtime& rt = vm.runtime();
   ObjArray* entries = rt.newArray();
   GCRoot entriesRoot(rt, (Obj*)entries);
@@ -1148,6 +1249,7 @@ Value nativeSet(VM& vm, int argCount, Value* args) {
 }
 
 Value setAdd(VM& vm, int argCount, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   ObjSet* set = asSet(args[0]);
   for (int i = 1; i < argCount; i++) {
     if (!addToSet(vm, set, args[i])) return nilValue();
@@ -1155,25 +1257,30 @@ Value setAdd(VM& vm, int argCount, Value* args) {
   return args[0];
 }
 
-Value setRemove(VM&, int, Value* args) {
+Value setRemove(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   return boolValue(asSet(args[0])->entries.remove(args[1]));
 }
 
-Value setHas(VM&, int, Value* args) {
+Value setHas(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   Value ignored;
   return boolValue(asSet(args[0])->entries.get(args[1], &ignored));
 }
 
-Value setLen(VM&, int, Value* args) {
+Value setLen(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   return numberValue((double)asSet(args[0])->entries.count());
 }
 
-Value setClear(VM&, int, Value* args) {
+Value setClear(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   asSet(args[0])->entries.clear();
   return args[0];
 }
 
 Value setItems(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   ObjArray* items = vm.runtime().newArray();
   GCRoot itemsRoot(vm.runtime(), (Obj*)items);
   for (const ValueEntry& slot : asSet(args[0])->entries.slots()) {
@@ -1193,6 +1300,11 @@ Value setCombine(VM& vm, Value* args, int mode) {
   ObjSet* right = asSet(args[1]);
   ObjSet* result = vm.runtime().newSet();
   GCRoot resultRoot(vm.runtime(), (Obj*)result);
+  // Nothing below re-enters the interpreter, so both sets can be held
+  // for the whole of it. The pair form takes them in address order, so
+  // two tasks combining the same two sets from opposite sides cannot
+  // each end up holding what the other is waiting for.
+  ObjLock guard(vm.runtime(), (Obj*)left, (Obj*)right);
 
   for (const ValueEntry& slot : left->entries.slots()) {
     if (!slot.used) continue;
@@ -1219,6 +1331,7 @@ Value setEquals(VM& vm, int, Value* args) {
   if (!isSet(args[1])) return boolValue(false);
   ObjSet* left = asSet(args[0]);
   ObjSet* right = asSet(args[1]);
+  ObjLock guard(vm.runtime(), (Obj*)left, (Obj*)right);
   if (left->entries.count() != right->entries.count()) return boolValue(false);
   for (const ValueEntry& slot : left->entries.slots()) {
     if (!slot.used) continue;
@@ -1258,6 +1371,7 @@ Value enumLen(VM&, int, Value* args) {
 }
 
 Value mapValues(VM& vm, int, Value* args) {
+  ObjLock guard(vm.runtime(), args[0]);
   ObjArray* values = vm.runtime().newArray();
   GCRoot valuesRoot(vm.runtime(), (Obj*)values);
   for (const ValueEntry& slot : asMap(args[0])->entries.slots()) {

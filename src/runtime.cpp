@@ -1,5 +1,7 @@
 #include "runtime.h"
 
+#include <cassert>
+
 #include <cstdio>
 #include <cstdlib>
 #include <unistd.h>
@@ -25,6 +27,11 @@ uint32_t hashString(const char* key, size_t length) {
 // memory for fewer pauses.
 constexpr size_t kHeapGrowFactor = 2;
 
+// How much a thread may allocate before folding its count into the
+// shared total. Small enough that the trigger is not missed by much,
+// large enough that the atomic add is rare.
+constexpr size_t kRollupBytes = 64 * 1024;
+
 void markTable(Runtime& rt, Table& table) {
   for (int i = 0; i < table.capacity(); i++) {
     Entry* entry = &table.entries()[i];
@@ -35,7 +42,184 @@ void markTable(Runtime& rt, Table& table) {
 
 }  // namespace
 
+// One Runtime per process, so the calling thread's entry can be a
+// thread local rather than something every allocation has to be handed.
+thread_local Thread* t_thread = nullptr;
+thread_local Runtime* t_runtime = nullptr;
+
+std::atomic<bool> gParallel{false};
+
+Thread* Runtime::currentThread() { return t_thread; }
+
+Runtime* Runtime::current() { return t_runtime; }
+
+// Takes the interner's lock, and only bothers once a second thread
+// exists.
+Runtime::InternLock::InternLock(Runtime& rt) : rt_(rt) {
+  if (!runningInParallel()) return;
+  held_ = true;
+  // Parks while waiting: allocating a string can start a collection, so
+  // a thread that holds this can be parked when another one asks for it.
+  rt_.lockParked(rt_.internMutex_);
+}
+
+Runtime::InternLock::~InternLock() {
+  if (held_) rt_.internMutex_.unlock();
+}
+
+void Runtime::noteBytes(size_t bytes) {
+  if (t_thread == nullptr) return;
+  t_thread->bytesAllocated += bytes;
+  t_thread->sinceRollup += bytes;
+}
+
+void Runtime::becomeParallel() {
+  gParallel.store(true, std::memory_order_relaxed);
+}
+
+Thread* Runtime::attachThread(VM* vm) {
+  Thread* thread = newThread();
+  adoptThread(thread, vm);
+  return thread;
+}
+
+Thread* Runtime::newThread() {
+  // Registered parked, because it is not running yet. The collector can
+  // then go ahead without waiting for a thread that has not started, and
+  // there is nothing on it to scan.
+  Thread* thread = new Thread();
+  thread->parked.store(true, std::memory_order_release);
+  std::unique_lock<std::mutex> guard(worldMutex_);
+  // The collector walks this list without holding the mutex, so it must
+  // not grow underneath it.
+  while (collecting_) worldCond_.wait(guard);
+  threads_.push_back(thread);
+  return thread;
+}
+
+void Runtime::adoptThread(Thread* thread, VM* vm) {
+  t_thread = thread;
+  t_runtime = this;
+  {
+    std::unique_lock<std::mutex> guard(worldMutex_);
+    // The collector reads this while it walks the threads, so it is set
+    // between collections rather than during one.
+    while (collecting_) worldCond_.wait(guard);
+    thread->vm = vm;
+    thread->parked.store(false, std::memory_order_release);
+  }
+  worldCond_.notify_all();
+}
+
+void Runtime::detachThread(Thread* thread) {
+  std::unique_lock<std::mutex> guard(worldMutex_);
+  // Same reason as newThread: the list this thread is about to leave is
+  // one the collector may be walking.
+  while (collecting_) worldCond_.wait(guard);
+  for (size_t i = 0; i < threads_.size(); i++) {
+    if (threads_[i] != thread) continue;
+    thread->vm = nullptr;
+    // What this thread allocated outlives it, so the objects move to
+    // the thread that is left rather than being freed or orphaned.
+    if (thread->objects != nullptr && !threads_.empty()) {
+      Thread* keeper = threads_[0] == thread
+                           ? (threads_.size() > 1 ? threads_[1] : nullptr)
+                           : threads_[0];
+      if (keeper != nullptr) {
+        Obj* last = thread->objects;
+        while (last->next != nullptr) last = last->next;
+        last->next = keeper->objects;
+        keeper->objects = thread->objects;
+        keeper->bytesAllocated += thread->bytesAllocated;
+        thread->objects = nullptr;
+        thread->bytesAllocated = 0;
+      }
+    }
+    threads_.erase(threads_.begin() + (long)i);
+    break;
+  }
+  // A thread that has gone must not hold the collector up.
+  worldCond_.notify_all();
+  if (t_thread == thread) {
+    t_thread = nullptr;
+    t_runtime = nullptr;
+  }
+}
+
+void Runtime::clearThreadVM(Thread* thread, VM* vm) {
+  if (thread == nullptr) return;
+  std::unique_lock<std::mutex> guard(worldMutex_);
+  while (collecting_) worldCond_.wait(guard);
+  if (thread->vm == vm) thread->vm = nullptr;
+}
+
+void Runtime::reachSafepoint() {
+  std::unique_lock<std::mutex> guard(worldMutex_);
+  Thread* self = t_thread;
+  if (self == nullptr) return;
+  self->parked.store(true, std::memory_order_release);
+  worldCond_.notify_all();
+  while (gcPending.load(std::memory_order_relaxed)) worldCond_.wait(guard);
+  self->parked.store(false, std::memory_order_release);
+}
+
+void Runtime::park() {
+  std::lock_guard<std::mutex> guard(worldMutex_);
+  if (t_thread != nullptr) {
+    t_thread->parked.store(true, std::memory_order_release);
+  }
+  worldCond_.notify_all();
+}
+
+void Runtime::unpark() {
+  std::unique_lock<std::mutex> guard(worldMutex_);
+  // A collection that is already under way has to finish first: it may
+  // be looking at this thread's stack right now.
+  while (gcPending.load(std::memory_order_relaxed)) worldCond_.wait(guard);
+  if (t_thread != nullptr) {
+    t_thread->parked.store(false, std::memory_order_release);
+  }
+}
+
+void Runtime::lockParked(std::mutex& mutex) {
+  // The uncontended case is the usual one and costs nothing extra.
+  if (mutex.try_lock()) return;
+  park();
+  mutex.lock();
+  unpark();
+}
+
+void Runtime::stopWorld(std::unique_lock<std::mutex>& guard) {
+  gcPending.store(true, std::memory_order_relaxed);
+  Thread* self = t_thread;
+  if (self != nullptr) self->parked.store(true, std::memory_order_release);
+
+  for (;;) {
+    bool allParked = true;
+    for (Thread* thread : threads_) {
+      if (!thread->parked.load(std::memory_order_acquire)) {
+        allParked = false;
+        break;
+      }
+    }
+    if (allParked) break;
+    worldCond_.wait(guard);
+  }
+}
+
+void Runtime::startWorld() {
+  gcPending.store(false, std::memory_order_relaxed);
+  if (t_thread != nullptr) {
+    t_thread->parked.store(false, std::memory_order_release);
+  }
+  worldCond_.notify_all();
+}
+
 Runtime::Runtime() {
+  // The thread that builds the Runtime is the first one that can
+  // allocate, so it needs an entry before anything else happens.
+  mainThread_ = attachThread(nullptr);
+
   initString = internString("init");
   messageString = internString("message");
   strString = internString("str");
@@ -45,33 +229,41 @@ Runtime::Runtime() {
 
 Runtime::~Runtime() {
   // Tear the whole heap down. Order does not matter because nothing runs
-  // after this point.
-  Obj* obj = objects_;
-  while (obj != nullptr) {
-    Obj* next = obj->next;
-    freeObject(obj);
-    obj = next;
+  // after this point, and neither does which thread allocated what.
+  for (Thread* thread : threads_) {
+    Obj* obj = thread->objects;
+    while (obj != nullptr) {
+      Obj* next = obj->next;
+      freeObject(obj);
+      obj = next;
+    }
+    thread->objects = nullptr;
   }
+  detachThread(mainThread_);
+  delete mainThread_;
 }
 
 // ---- allocation -----------------------------------------------------
 
 template <typename T>
-static T* makeObject(Runtime& rt, Obj** listHead, ObjType type,
-                     size_t* bytesAllocated) {
+static T* makeObject(Runtime& rt, ObjType type) {
+  Thread* self = Runtime::currentThread();
   T* object = new T();
   object->obj.type = type;
   object->obj.isMarked = false;
-  object->obj.next = *listHead;
-  *listHead = (Obj*)object;
-  *bytesAllocated += sizeof(T);
+  object->obj.lockDepth = 0;
+  object->obj.unused = 0;
+  object->obj.owner.store(0, std::memory_order_relaxed);
+  object->obj.next = self->objects;
+  self->objects = (Obj*)object;
+  self->bytesAllocated += sizeof(T);
+  self->sinceRollup += sizeof(T);
   (void)rt;
   return object;
 }
 
-#define NEW_OBJECT(Type, tag)                                     \
-  (maybeCollect(),                                                \
-   makeObject<Type>(*this, &objects_, ObjType::tag, &bytesAllocated))
+#define NEW_OBJECT(Type, tag) \
+  (maybeCollect(), makeObject<Type>(*this, ObjType::tag))
 
 namespace {
 
@@ -91,7 +283,9 @@ ObjString* Runtime::allocateString(char* chars, size_t length, uint32_t hash,
   string->length = length;
   string->chars = chars;
   string->hash = hash;
-  bytesAllocated += length + 1;
+  // The characters go on the same count as the object itself, or the
+  // sweep would take them off a total they were never added to.
+  noteBytes(length + 1);
 
   if (share) {
     // The interner must not be the only thing keeping the string alive
@@ -106,21 +300,30 @@ ObjString* Runtime::allocateString(char* chars, size_t length, uint32_t hash,
 ObjString* Runtime::copyString(const char* chars, size_t length) {
   uint32_t hash = hashString(chars, length);
   bool share = length <= kInternMaxLength;
-  if (share) {
-    ObjString* interned = strings.findString(chars, length, hash);
-    if (interned != nullptr) return interned;
+  if (!share) {
+    char* heapChars = new char[length + 1];
+    std::memcpy(heapChars, chars, length);
+    heapChars[length] = '\0';
+    return allocateString(heapChars, length, hash, false);
   }
+
+  // Held across the lookup and the insert both, so that two threads
+  // asking for the same short string get the same object.
+  InternLock locked(*this);
+  ObjString* interned = strings.findString(chars, length, hash);
+  if (interned != nullptr) return interned;
 
   char* heapChars = new char[length + 1];
   std::memcpy(heapChars, chars, length);
   heapChars[length] = '\0';
-  return allocateString(heapChars, length, hash, share);
+  return allocateString(heapChars, length, hash, true);
 }
 
 ObjString* Runtime::takeString(char* chars, size_t length) {
   uint32_t hash = hashString(chars, length);
   bool share = length <= kInternMaxLength;
   if (share) {
+    InternLock locked(*this);
     ObjString* interned = strings.findString(chars, length, hash);
     if (interned != nullptr) {
       // Someone already owns an identical string, so the buffer handed
@@ -128,8 +331,9 @@ ObjString* Runtime::takeString(char* chars, size_t length) {
       delete[] chars;
       return interned;
     }
+    return allocateString(chars, length, hash, true);
   }
-  return allocateString(chars, length, hash, share);
+  return allocateString(chars, length, hash, false);
 }
 
 ObjString* Runtime::copyString(const std::string& text) {
@@ -138,6 +342,7 @@ ObjString* Runtime::copyString(const std::string& text) {
 
 ObjString* Runtime::internString(const char* chars, size_t length) {
   uint32_t hash = hashString(chars, length);
+  InternLock locked(*this);
   ObjString* interned = strings.findString(chars, length, hash);
   if (interned != nullptr) return interned;
 
@@ -183,7 +388,7 @@ ObjClosure* Runtime::newClosure(ObjFunction* function) {
   closure->upvalueCount = function->upvalueCount;
   closure->upvalues = new ObjUpvalue*[function->upvalueCount];
   for (int i = 0; i < function->upvalueCount; i++) closure->upvalues[i] = nullptr;
-  bytesAllocated += sizeof(ObjUpvalue*) * (size_t)function->upvalueCount;
+  noteBytes(sizeof(ObjUpvalue*) * (size_t)function->upvalueCount);
   popRoot();
   return closure;
 }
@@ -278,6 +483,7 @@ ObjTask* Runtime::newTask() {
   task->done = false;
   task->failed = false;
   task->joined = false;
+  task->reaped.store(false, std::memory_order_relaxed);
   task->error = nilValue();
   return task;
 }
@@ -351,19 +557,8 @@ ObjError* Runtime::newError(ObjString* message, ObjString* trace,
 
 // ---- roots ----------------------------------------------------------
 
-void Runtime::pushRoot(Obj* obj) { tempRoots_.push_back(obj); }
-void Runtime::popRoot() { tempRoots_.pop_back(); }
-
-void Runtime::registerVM(VM* vm) { vms_.push_back(vm); }
-
-void Runtime::unregisterVM(VM* vm) {
-  for (size_t i = 0; i < vms_.size(); i++) {
-    if (vms_[i] == vm) {
-      vms_.erase(vms_.begin() + (long)i);
-      return;
-    }
-  }
-}
+void Runtime::pushRoot(Obj* obj) { t_thread->tempRoots.push_back(obj); }
+void Runtime::popRoot() { t_thread->tempRoots.pop_back(); }
 
 void Runtime::registerTask(ObjTask* task) { liveTasks_.push_back(task); }
 
@@ -376,19 +571,28 @@ void Runtime::retireTask(ObjTask* task) {
   }
 }
 
+void Runtime::reapTask(ObjTask* task) {
+  if (task->thread == nullptr) return;
+  // Exactly one of the places that can join a task actually does. The
+  // others find the flag already set and leave it alone.
+  if (task->reaped.exchange(true, std::memory_order_acq_rel)) return;
+  if (task->thread->joinable()) task->thread->join();
+}
+
 void Runtime::joinAllTasks() {
   std::vector<ObjTask*> pending;
   {
-    std::lock_guard<std::mutex> guard(lock);
+    lockParked(lock);
+    std::lock_guard<std::mutex> guard(lock, std::adopt_lock);
     pending = liveTasks_;
   }
   // Joined outside the lock, because a task that is still running needs
-  // the lock to make progress and reach its end.
-  for (ObjTask* task : pending) {
-    if (task->thread != nullptr && task->thread->joinable()) {
-      task->thread->join();
-    }
-  }
+  // it to make progress and reach its end. Parked as well: a task on its
+  // way out may be waiting for a collection, and a collection waits for
+  // every thread including this one.
+  park();
+  for (ObjTask* task : pending) reapTask(task);
+  unpark();
 }
 
 // ---- collector ------------------------------------------------------
@@ -404,15 +608,25 @@ void Runtime::markValue(Value value) {
 }
 
 void Runtime::markRoots() {
-  // Every task's stack, call frames and open upvalues. Tasks that are not
-  // running are parked with a stable stack, so this is safe.
-  for (VM* vm : vms_) vm->markRoots();
+  // Every task's stack, call frames and open upvalues. Every thread is
+  // parked, so none of these is moving.
+  for (Thread* thread : threads_) {
+    if (!thread->parked.load(std::memory_order_acquire)) {
+      std::fprintf(stderr, "[gc] a thread was still running\n");
+      std::abort();
+    }
+    if (thread->vm != nullptr) thread->vm->markRoots();
+  }
 
   markTable(*this, modules);
   markTable(*this, builtins);
   for (Table* table : rootTables) markTable(*this, *table);
 
-  for (Obj* obj : tempRoots_) markObject(obj);
+  // Every thread's temporary roots, not only the collector's: another
+  // thread is parked part way through building something.
+  for (Thread* thread : threads_) {
+    for (Obj* obj : thread->tempRoots) markObject(obj);
+  }
   for (ObjTask* task : liveTasks_) markObject((Obj*)task);
 
   markObject((Obj*)initString);
@@ -557,74 +771,77 @@ void Runtime::traceReferences() {
   }
 }
 
-void Runtime::freeObject(Obj* obj) {
+// Returns how many bytes it gave back, so that sweep can work out what
+// a thread still holds without keeping a second count in step.
+size_t Runtime::freeObject(Obj* obj) {
+  size_t freed = 0;
   switch (obj->type) {
     case ObjType::String: {
       ObjString* string = (ObjString*)obj;
-      bytesAllocated -= string->length + 1;
+      freed += string->length + 1;
       delete[] string->chars;
-      bytesAllocated -= sizeof(ObjString);
+      freed += sizeof(ObjString);
       delete string;
       break;
     }
     case ObjType::Function:
-      bytesAllocated -= sizeof(ObjFunction);
+      freed += sizeof(ObjFunction);
       delete (ObjFunction*)obj;
       break;
     case ObjType::Native:
-      bytesAllocated -= sizeof(ObjNative);
+      freed += sizeof(ObjNative);
       delete (ObjNative*)obj;
       break;
     case ObjType::Closure: {
       ObjClosure* closure = (ObjClosure*)obj;
-      bytesAllocated -= sizeof(ObjUpvalue*) * (size_t)closure->upvalueCount;
+      freed += sizeof(ObjUpvalue*) * (size_t)closure->upvalueCount;
       delete[] closure->upvalues;
-      bytesAllocated -= sizeof(ObjClosure);
+      freed += sizeof(ObjClosure);
       delete closure;
       break;
     }
     case ObjType::Upvalue:
-      bytesAllocated -= sizeof(ObjUpvalue);
+      freed += sizeof(ObjUpvalue);
       delete (ObjUpvalue*)obj;
       break;
     case ObjType::Class:
-      bytesAllocated -= sizeof(ObjClass);
+      freed += sizeof(ObjClass);
       delete (ObjClass*)obj;
       break;
     case ObjType::Instance:
-      bytesAllocated -= sizeof(ObjInstance);
+      freed += sizeof(ObjInstance);
       delete (ObjInstance*)obj;
       break;
     case ObjType::BoundMethod:
-      bytesAllocated -= sizeof(ObjBoundMethod);
+      freed += sizeof(ObjBoundMethod);
       delete (ObjBoundMethod*)obj;
       break;
     case ObjType::Array:
-      bytesAllocated -= sizeof(ObjArray);
+      freed += sizeof(ObjArray);
       delete (ObjArray*)obj;
       break;
     case ObjType::Map:
-      bytesAllocated -= sizeof(ObjMap);
+      freed += sizeof(ObjMap);
       delete (ObjMap*)obj;
       break;
     case ObjType::Set:
-      bytesAllocated -= sizeof(ObjSet);
+      freed += sizeof(ObjSet);
       delete (ObjSet*)obj;
       break;
     case ObjType::Module:
-      bytesAllocated -= sizeof(ObjModule);
+      freed += sizeof(ObjModule);
       delete (ObjModule*)obj;
       break;
     case ObjType::Enum:
-      bytesAllocated -= sizeof(ObjEnum);
+      freed += sizeof(ObjEnum);
       delete (ObjEnum*)obj;
       break;
     case ObjType::EnumMember:
-      bytesAllocated -= sizeof(ObjEnumMember);
+      freed += sizeof(ObjEnumMember);
       delete (ObjEnumMember*)obj;
       break;
     case ObjType::Channel:
-      bytesAllocated -= sizeof(ObjChannel);
+      freed += sizeof(ObjChannel);
       delete (ObjChannel*)obj;
       break;
     case ObjType::Task: {
@@ -632,10 +849,12 @@ void Runtime::freeObject(Obj* obj) {
       // A task is only collectable once it has finished, so the thread is
       // always joinable here rather than still running.
       if (task->thread != nullptr) {
-        if (task->thread->joinable()) task->thread->join();
+        // Only collectable once it has finished and been joined, so
+        // this is nearly always already done.
+        reapTask(task);
         delete task->thread;
       }
-      bytesAllocated -= sizeof(ObjTask);
+      freed += sizeof(ObjTask);
       delete task;
       break;
     }
@@ -644,65 +863,89 @@ void Runtime::freeObject(Obj* obj) {
       // Closing on collection is a convenience, not a guarantee. Programs
       // that care about flush order should call close().
       if (file->open && file->handle != nullptr) std::fclose(file->handle);
-      bytesAllocated -= sizeof(ObjFile);
+      freed += sizeof(ObjFile);
       delete file;
       break;
     }
     case ObjType::Socket: {
       ObjSocket* socket = (ObjSocket*)obj;
       if (!socket->closed && socket->fd >= 0) ::close(socket->fd);
-      bytesAllocated -= sizeof(ObjSocket);
+      freed += sizeof(ObjSocket);
       delete socket;
       break;
     }
     case ObjType::Regex: {
       ObjRegex* regex = (ObjRegex*)obj;
       delete regex->program;
-      bytesAllocated -= sizeof(ObjRegex);
+      freed += sizeof(ObjRegex);
       delete regex;
       break;
     }
     case ObjType::NativeLib:
-      bytesAllocated -= sizeof(ObjNativeLib);
+      freed += sizeof(ObjNativeLib);
       delete (ObjNativeLib*)obj;
       break;
     case ObjType::Error:
-      bytesAllocated -= sizeof(ObjError);
+      freed += sizeof(ObjError);
       delete (ObjError*)obj;
       break;
     case ObjType::Type:
-      bytesAllocated -= sizeof(ObjTypeDesc);
+      freed += sizeof(ObjTypeDesc);
       delete (ObjTypeDesc*)obj;
       break;
   }
+  return freed;
 }
 
 void Runtime::sweep() {
-  Obj* previous = nullptr;
-  Obj* object = objects_;
-  while (object != nullptr) {
-    if (object->isMarked) {
-      object->isMarked = false;
-      previous = object;
-      object = object->next;
-    } else {
-      Obj* unreached = object;
-      object = object->next;
-      if (previous != nullptr) {
-        previous->next = object;
+  // Each thread's list is swept on its own, and its share of the total
+  // is worked out again from what survived. Counting up rather than
+  // subtracting as objects are freed means the totals cannot drift.
+  size_t live = 0;
+  for (Thread* thread : threads_) {
+    Obj* previous = nullptr;
+    Obj* object = thread->objects;
+    size_t freed = 0;
+    while (object != nullptr) {
+      if (object->isMarked) {
+        object->isMarked = false;
+        previous = object;
+        object = object->next;
       } else {
-        objects_ = object;
+        Obj* unreached = object;
+        object = object->next;
+        if (previous != nullptr) {
+          previous->next = object;
+        } else {
+          thread->objects = object;
+        }
+        freed += freeObject(unreached);
       }
-      freeObject(unreached);
     }
+    size_t kept = thread->bytesAllocated - freed;
+    thread->bytesAllocated = kept;
+    thread->sinceRollup = 0;
+    live += kept;
   }
+  bytesAllocated.store(live, std::memory_order_relaxed);
 }
 
 void Runtime::collectGarbage() {
   if (collecting_) return;
-  collecting_ = true;
 
-  size_t before = bytesAllocated;
+  // Whoever gets here first runs the collection. Everyone else waits at
+  // the safepoint below and finds the work already done.
+  std::unique_lock<std::mutex> guard(worldMutex_);
+  if (collecting_) return;
+  stopWorld(guard);
+  collecting_ = true;
+  // The world is stopped by gcPending rather than by this mutex, so it
+  // can be let go: a thread that wants to park while the collector
+  // works has to be able to, or a channel operation could hold a lock
+  // the collector is waiting on.
+  guard.unlock();
+
+  size_t before = bytesAllocated.load(std::memory_order_relaxed);
   if (logGC) std::fprintf(stderr, "[gc] begin, %zu bytes\n", before);
 
   markRoots();
@@ -711,24 +954,60 @@ void Runtime::collectGarbage() {
   // its entries for strings nothing else reached, then sweep.
   strings.removeUnmarked();
   sweep();
+  // Every thread is parked, so none of them is inside a table lookup.
+  // That makes this the one safe moment to let the arrays that resizes
+  // replaced go.
+  Table::releaseRetiredArrays();
 
-  nextGC = bytesAllocated * kHeapGrowFactor;
+  size_t live = bytesAllocated.load(std::memory_order_relaxed);
+  nextGC = live * kHeapGrowFactor;
   if (nextGC < 1024 * 1024) nextGC = 1024 * 1024;
   collections++;
-  if (bytesAllocated > peakBytes) peakBytes = bytesAllocated;
+  if (live > peakBytes) peakBytes = live;
 
   if (logGC) {
     std::fprintf(stderr, "[gc] end, %zu bytes freed, %zu live, next at %zu\n",
-                 before - bytesAllocated, bytesAllocated, nextGC);
+                 before - live, live, nextGC);
   }
+  guard.lock();
   collecting_ = false;
+  startWorld();
 }
 
 void Runtime::maybeCollect() {
   if (collecting_) return;
+  Thread* self = t_thread;
+
+  // What this thread has allocated since the last time is folded into
+  // the shared total now and then rather than on every object, so an
+  // allocation costs a plain add and one relaxed load.
+  if (self != nullptr && self->sinceRollup >= kRollupBytes) {
+    bytesAllocated.fetch_add(self->sinceRollup, std::memory_order_relaxed);
+    self->sinceRollup = 0;
+  }
+
+  // Another thread may be waiting to collect. Allocating is a place
+  // where this thread's stack is in a state the collector understands,
+  // so it is a safepoint.
+  safepoint();
+
   // Stress mode collects before every allocation. It makes the test suite
   // slow and makes missing roots fail immediately instead of rarely.
-  if (stressGC || bytesAllocated > nextGC) collectGarbage();
+  if (stressGC) {
+    if (self != nullptr) {
+      bytesAllocated.fetch_add(self->sinceRollup, std::memory_order_relaxed);
+      self->sinceRollup = 0;
+    }
+    collectGarbage();
+    return;
+  }
+  if (bytesAllocated.load(std::memory_order_relaxed) > nextGC) {
+    if (self != nullptr) {
+      bytesAllocated.fetch_add(self->sinceRollup, std::memory_order_relaxed);
+      self->sinceRollup = 0;
+    }
+    collectGarbage();
+  }
 }
 
 }  // namespace red

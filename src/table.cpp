@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <mutex>
 
 #include "object.h"
 
@@ -38,6 +39,19 @@ static Entry* findEntry(Entry* entries, int capacity, ObjString* key) {
   }
 }
 
+// Arrays that resizes replaced, kept until the collector stops the
+// world. A reader may still be walking one, and it has no way to say so.
+namespace {
+std::mutex g_retiredMutex;
+std::vector<Entry*> g_retired;
+}  // namespace
+
+void Table::releaseRetiredArrays() {
+  std::lock_guard<std::mutex> guard(g_retiredMutex);
+  for (Entry* entries : g_retired) delete[] entries;
+  g_retired.clear();
+}
+
 void Table::adjustCapacity(int capacity) {
   Entry* entries = new Entry[capacity];
   for (int i = 0; i < capacity; i++) {
@@ -56,21 +70,57 @@ void Table::adjustCapacity(int capacity) {
     count_++;
   }
 
-  delete[] entries_;
+  if (runningInParallel() && entries_ != nullptr) {
+    // Someone may be part way through a lookup in the old array. It is
+    // kept rather than freed, and goes at the next collection.
+    std::lock_guard<std::mutex> guard(g_retiredMutex);
+    g_retired.push_back(entries_);
+  } else {
+    delete[] entries_;
+  }
   entries_ = entries;
   capacity_ = capacity;
 }
 
 bool Table::get(ObjString* key, Value* out) const {
-  if (count_ == 0) return false;
-  Entry* entry = findEntry(entries_, capacity_, key);
-  if (entry->key == nullptr) return false;
-  *out = entry->value;
-  return true;
+  if (!runningInParallel()) {
+    if (count_ == 0) return false;
+    Entry* entry = findEntry(entries_, capacity_, key);
+    if (entry->key == nullptr) return false;
+    *out = entry->value;
+    return true;
+  }
+
+  for (;;) {
+    uint32_t before = version_.load(std::memory_order_acquire);
+    // Odd means a writer is inside the table right now.
+    if ((before & 1) != 0) continue;
+
+    Entry* entries = entries_;
+    int capacity = capacity_;
+    // The array and its size have to come from the same moment, or the
+    // probe could run off the end of one with the size of the other.
+    if (version_.load(std::memory_order_acquire) != before) continue;
+    if (capacity == 0) return false;
+
+    Entry* entry = findEntry(entries, capacity, key);
+    bool found = entry->key != nullptr;
+    Value value = entry->value;
+    // Only now is what was read known to be a value that was really
+    // there. Anything read from a table a writer was moving is thrown
+    // away and the probe runs again.
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (version_.load(std::memory_order_relaxed) != before) continue;
+
+    if (!found) return false;
+    *out = value;
+    return true;
+  }
 }
 
 bool Table::set(ObjString* key, Value value) {
   assert(key != nullptr);
+  Writing writing(*this);
   if ((double)count_ + 1 > (double)capacity_ * kMaxLoad) {
     adjustCapacity(capacity_ < 8 ? 8 : capacity_ * 2);
   }
@@ -86,6 +136,7 @@ bool Table::set(ObjString* key, Value value) {
 
 bool Table::remove(ObjString* key) {
   if (count_ == 0) return false;
+  Writing writing(*this);
   Entry* entry = findEntry(entries_, capacity_, key);
   if (entry->key == nullptr) return false;
   entry->key = nullptr;
@@ -102,6 +153,11 @@ void Table::addAll(const Table& from) {
 
 ObjString* Table::findString(const char* chars, size_t length,
                              uint32_t hash) const {
+  // The interner is the one table where a lookup and the insert that
+  // follows it have to be one step, or two threads would each make a
+  // string for the same text and the pointer comparison every other
+  // table relies on would stop meaning anything. Runtime holds a lock
+  // across both, so this needs no seqlock of its own.
   if (count_ == 0) return nullptr;
   uint32_t index = hash & (uint32_t)(capacity_ - 1);
   for (;;) {
