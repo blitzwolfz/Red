@@ -591,16 +591,15 @@ back what it returned.
 ```red
 fun readAll(paths) {
   const tasks = [];
-  for (let path in paths) { tasks.push(spawn readOne(path)); }
+  for (let path in paths) { tasks.push(spawn parse.readFile(path)); }
 
   const total = parse.Report();
   const failures = [];
   for (let task in tasks) {
-    const [report, problem] = task.join();
-    if (problem != nil) {
-      failures.push(problem);
-    } else {
-      total.merge(report);
+    try {
+      total.merge(task.join());
+    } catch (e: "io") {
+      failures.push(e.message);
     }
   }
   return [total, failures];
@@ -613,21 +612,11 @@ Three things about this shape are deliberate.
 the same time, but merged in the order they were named, so the output
 does not depend on which task finished first.
 
-**Failure is returned, not thrown.** An error thrown inside a task does
-not reach the joiner as itself: `join()` reports it with kind `"task"`
-and the original message wrapped in a sentence, so `catch (e: "io")`
-around the join will not match. Catching inside the task and returning
-the problem as a value keeps the shape the same on both paths:
-
-```red
-fun readOne(path) {
-  try {
-    return [parse.readFile(path), nil];
-  } catch (e: "io") {
-    return [nil, e.message];
-  }
-}
-```
+**An error comes back out of `join()` as itself**, with the kind and the
+payload it was raised with. The `catch (e: "io")` here is the same clause
+that would have worked had `readFile` been called directly, and the trace
+in the error still points at the line inside the task where it went
+wrong.
 
 **One bad file does not lose the others.** The failures are reported and
 the rest of the work is still printed. Only the exit code says something

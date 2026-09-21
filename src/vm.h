@@ -83,6 +83,10 @@ class VM {
   // Builds an error value without raising it. Natives that construct an
   // error for the program to inspect use this.
   Value makeError(const char* kind, const std::string& message, Value payload);
+  // Reports an error that already exists, keeping its kind, payload and
+  // trace. join() uses this to raise what the task raised rather than a
+  // description of it.
+  Value reraise(Value error);
   bool failed() const { return failed_; }
 
   // Formats the active call stack, innermost frame first.

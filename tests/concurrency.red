@@ -93,3 +93,37 @@ for (;;) {
   count = count + 1;
 }
 print(count);                        // expect: 4
+
+// An error raised inside a task comes back out of join() as itself, with
+// the kind and payload it was raised with, so a catch clause on this
+// side is the one that would have worked had the call been direct.
+fun cannotRead(path) {
+  throw error("cannot read '${path}'", path, "io");
+}
+
+const failing = spawn cannotRead("data.txt");
+try {
+  failing.join();
+} catch (e: "io") {
+  print(e.kind);                     // expect: io
+  print(e.message);                  // expect: cannot read 'data.txt'
+  print(e.payload);                  // expect: data.txt
+}
+
+// One the runtime raised, rather than the program.
+fun divideByZero() { return 1 / 0; }
+const dividing = spawn divideByZero();
+try {
+  dividing.join();
+} catch (e: "zero-division") {
+  print(e.message);                  // expect: Division by zero.
+}
+
+// A task that throws something that is not an error still arrives as one.
+fun throwAString() { throw "a bare string"; }
+const bare = spawn throwAString();
+try {
+  bare.join();
+} catch (e: "user") {
+  print(e.message);                  // expect: a bare string
+}

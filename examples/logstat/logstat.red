@@ -28,33 +28,24 @@ fun describe() {
   return spec;
 }
 
-// What one task does. An error thrown inside a task does not reach the
-// joiner as itself: join() reports it with kind "task" and the original
-// message wrapped in a sentence. So failure is returned as a value here
-// rather than thrown, and the shape is the same either way.
-fun readOne(path) {
-  try {
-    return [parse.readFile(path), nil];
-  } catch (e: "io") {
-    return [nil, e.message];
-  }
-}
-
 // Reads every file, one task each, and folds the results together. The
 // files are read in parallel but merged in the order they were named, so
 // the output does not depend on which task finished first.
+//
+// An error raised inside a task comes back out of join() as itself, with
+// its kind and payload, so the catch clause here is the same one that
+// would have worked had readFile been called directly.
 fun readAll(paths) {
   const tasks = [];
-  for (let path in paths) { tasks.push(spawn readOne(path)); }
+  for (let path in paths) { tasks.push(spawn parse.readFile(path)); }
 
   const total = parse.Report();
   const failures = [];
   for (let task in tasks) {
-    const [report, problem] = task.join();
-    if (problem != nil) {
-      failures.push(problem);
-    } else {
-      total.merge(report);
+    try {
+      total.merge(task.join());
+    } catch (e: "io") {
+      failures.push(e.message);
     }
   }
   return [total, failures];

@@ -36,10 +36,10 @@ void taskMain(Runtime* runtime, ObjTask* task) {
   task->result = result;
   task->failed = status != InterpretResult::Ok;
   if (task->failed) {
-    std::string message = isError(vm.lastError)
-                              ? std::string(asError(vm.lastError)->message->chars)
-                              : valueToString(vm.lastError);
-    task->errorMessage = runtime->internString(message);
+    // Kept as the error itself, so that join() can raise it again with
+    // its kind and payload intact. The two tasks share one heap, so the
+    // value is as good here as it was there.
+    task->error = vm.lastError;
   }
   task->vm = nullptr;
   task->done = true;
@@ -147,6 +147,12 @@ Value VM::failAs(const char* kind, const char* format, ...) {
   std::vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
   failValue_ = makeError(kind, buffer, nilValue());
+  failed_ = true;
+  return nilValue();
+}
+
+Value VM::reraise(Value error) {
+  failValue_ = error;
   failed_ = true;
   return nilValue();
 }

@@ -130,9 +130,12 @@ Value taskJoin(VM& vm, int, Value* args) {
   vm.runtime().retireTask(task);
 
   if (task->failed) {
-    const char* message =
-        task->errorMessage == nullptr ? "task failed" : task->errorMessage->chars;
-    return vm.failAs("task", "Task failed: %s", message);
+    // The error the task raised, raised again here, so that a catch
+    // clause on this side selects on the same kind and reads the same
+    // payload as one inside the task would have.
+    if (isError(task->error)) return vm.reraise(task->error);
+    return vm.failAs("task", "Task failed: %s",
+                     valueToString(task->error).c_str());
   }
   return task->result;
 }
