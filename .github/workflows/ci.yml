@@ -64,8 +64,18 @@ jobs:
           ./build/red examples/legacy_bridge.red
           ./build/red examples/mini_compiler.red
           ./build/red examples/library_tour.red --loud ada grace
+          ./build/red examples/logstat/logstat.red examples/logstat/sample.log
           ./build/red compile examples/tour.red -o /tmp/tour.redc
           ./build/red /tmp/tour.redc
+
+      # The program docs/guide.md builds, and its own tests. It is the
+      # check that the guide still describes something that works.
+      - name: The guide's program
+        run: |
+          python3 tests/run.py --red build/red --tests examples/logstat/tests
+          ./build/red examples/logstat/logstat.red --json examples/logstat/sample.log
+          ./build/red compile examples/logstat/logstat.red
+          ./build/red examples/logstat/logstat.redc --quiet examples/logstat/sample.log
 
       # A library found on the search path, and the same library compiled
       # ahead of time and imported as a .redc.
