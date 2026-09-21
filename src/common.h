@@ -11,6 +11,10 @@
 
 namespace red {
 
+// The interpreter release. `red version` prints it, and `red pkg init`
+// records it in a new project's manifest.
+constexpr const char* kVersion = "0.5.0";
+
 // Bumped whenever the bytecode layout changes in a way that breaks
 // previously written chunks. docs/bytecode.md tracks the history.
 constexpr int kBytecodeVersion = 4;

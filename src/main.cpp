@@ -19,6 +19,7 @@
 #include "debug.h"
 #include "debugger.h"
 #include "format.h"
+#include "pkg.h"
 #include "runtime.h"
 #include "scanner.h"
 #include "serialize.h"
@@ -30,7 +31,6 @@ namespace red {
 
 namespace {
 
-constexpr const char* kVersion = "0.4.0";
 
 // Exit codes follow the same convention as v1: 65 for a program that did
 // not compile, 70 for one that failed while running.
@@ -48,6 +48,7 @@ void printUsage() {
       "  red compile <in.red> [-o f]  compile ahead of time to a .redc file\n"
       "  red build <in.red> [-o name] write a standalone executable\n"
       "  red repl                     start the interactive prompt\n"
+      "  red pkg <command>            manage this project's dependencies\n"
       "  red test [directory]         run the tests in a directory\n"
       "  red debug <script.red>       run a program under the debugger\n"
       "  red fmt [-w|--check] [files] format source, or standard input\n"
@@ -106,6 +107,12 @@ int runScript(Runtime& runtime, const std::string& path) {
     std::fprintf(stderr, "Cannot open '%s'.\n", path.c_str());
     return kExitUsage;
   }
+
+  // Which project this program belongs to, and therefore which
+  // dependencies its package imports resolve against. Found from the
+  // program's own directory, not the working directory, so running a
+  // script from elsewhere still uses its own red.mod.
+  setProjectDirectory(directoryOf(resolved));
 
   VM vm(runtime);
   vm.attach();
@@ -1093,6 +1100,10 @@ int main(int argc, const char* argv[]) {
     return 0;
   }
   if (command == "repl") return runRepl(runtime);
+  if (command == "pkg") {
+    std::vector<std::string> rest(positional.begin() + 1, positional.end());
+    return packageCommand(rest);
+  }
   if (command == "fmt") {
     bool write = false;
     bool check = false;

@@ -19,3 +19,7 @@ word_count_sample.txt
 
 *.pdf
 *.redc
+
+# Vendored dependencies. Fetched from red.lock, so they are never the
+# source of truth.
+vendor/

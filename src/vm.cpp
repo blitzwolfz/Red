@@ -8,6 +8,7 @@
 #include "compiler.h"
 #include "debug.h"
 #include "debugger.h"
+#include "pkg.h"
 #include "serialize.h"
 #include "types.h"
 #include "stdlib/builtins.h"
@@ -755,19 +756,36 @@ bool VM::importModule(ObjString* path) {
     if (!resolved.empty()) bundled = runtime_.bundle->find(resolved);
   }
 
+  std::string packageProblem;
   if (bundled == nullptr) {
-    // Relative imports resolve against the importing file, not the
-    // working directory, so a module can be moved without editing its
-    // imports.
-    resolved = absolutePath(joinPath(base, request));
+    // A request shaped like `github.com/owner/repo/text` names a
+    // package, not a file next door, and is answered from the project's
+    // dependencies rather than from the file system around the importer.
+    // docs/packages.md describes where it looks and in what order.
+    if (looksLikePackagePath(request)) {
+      std::string found =
+          resolvePackageImport(projectManifest(), request, &packageProblem);
+      if (!found.empty()) {
+        resolved = found;
+      } else {
+        resolved.clear();
+      }
+    }
 
-    // A path that is not next to the importing file is looked for on the
-    // library search path, so a shared library of Red code does not have
-    // to be reached with a chain of "..". docs/libraries.md describes the
-    // order.
-    if (!fileExists(resolved) && !request.empty() && request.front() != '/') {
-      std::string found = findOnLibraryPath(request);
-      if (!found.empty()) resolved = found;
+    if (resolved.empty()) {
+      // Relative imports resolve against the importing file, not the
+      // working directory, so a module can be moved without editing its
+      // imports.
+      resolved = absolutePath(joinPath(base, request));
+
+      // A path that is not next to the importing file is looked for on
+      // the library search path, so a shared library of Red code does not
+      // have to be reached with a chain of "..". docs/libraries.md
+      // describes the order.
+      if (!fileExists(resolved) && !request.empty() && request.front() != '/') {
+        std::string found = findOnLibraryPath(request);
+        if (!found.empty()) resolved = found;
+      }
     }
   }
   ObjString* key = runtime_.internString(resolved);
@@ -790,6 +808,11 @@ bool VM::importModule(ObjString* path) {
     name = bundled->name;
   } else {
     if (!readFile(resolved, &source)) {
+      // A package path that could not be answered says what to do about
+      // it, because "cannot open" is never the useful half of that.
+      if (!packageProblem.empty()) {
+        return runtimeErrorAs("import", "%s", packageProblem.c_str());
+      }
       return runtimeErrorAs("import", "Cannot open module '%s'.",
                             resolved.c_str());
     }
