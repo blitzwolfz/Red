@@ -239,7 +239,7 @@ ObjTask* Runtime::newTask() {
   task->done = false;
   task->failed = false;
   task->joined = false;
-  task->errorMessage = nullptr;
+  task->error = nilValue();
   return task;
 }
 
@@ -259,6 +259,12 @@ ObjSocket* Runtime::newSocket(int fd, bool listening) {
   socket->listening = listening;
   socket->closed = false;
   return socket;
+}
+
+ObjRegex* Runtime::newRegex(Regex* program) {
+  ObjRegex* regex = NEW_OBJECT(ObjRegex, Regex);
+  regex->program = program;
+  return regex;
 }
 
 ObjNativeLib* Runtime::newNativeLib(void* handle, ObjString* path) {
@@ -457,13 +463,15 @@ void Runtime::blackenObject(Obj* obj) {
       markValue(task->result);
       markValue(task->callee);
       for (Value arg : task->args) markValue(arg);
-      markObject((Obj*)task->errorMessage);
+      markValue(task->error);
       break;
     }
     case ObjType::File:
       markObject((Obj*)((ObjFile*)obj)->path);
       break;
     case ObjType::Socket:
+      break;
+    case ObjType::Regex:
       break;
     case ObjType::NativeLib:
       markObject((Obj*)((ObjNativeLib*)obj)->path);
@@ -583,6 +591,13 @@ void Runtime::freeObject(Obj* obj) {
       if (!socket->closed && socket->fd >= 0) ::close(socket->fd);
       bytesAllocated -= sizeof(ObjSocket);
       delete socket;
+      break;
+    }
+    case ObjType::Regex: {
+      ObjRegex* regex = (ObjRegex*)obj;
+      delete regex->program;
+      bytesAllocated -= sizeof(ObjRegex);
+      delete regex;
       break;
     }
     case ObjType::NativeLib:

@@ -14,6 +14,7 @@
 
 #include "chunk.h"
 #include "common.h"
+#include "regex.h"
 #include "table.h"
 #include "value.h"
 
@@ -41,6 +42,7 @@ enum class ObjType : uint8_t {
   Task,
   File,
   Socket,
+  Regex,
   NativeLib,
   Error,
 };
@@ -199,7 +201,9 @@ struct ObjTask {
   bool done;
   bool failed;
   bool joined;
-  ObjString* errorMessage;
+  // What the task failed with, kept whole so that join() can raise the
+  // same error rather than a description of one. Nil when it succeeded.
+  Value error;
 };
 
 struct ObjFile {
@@ -220,6 +224,13 @@ struct ObjNativeLib {
   Obj obj;
   void* handle;
   ObjString* path;
+};
+
+// A compiled regular expression. The program inside is built once, when
+// the pattern is compiled, and reused by every match against it.
+struct ObjRegex {
+  Obj obj;
+  Regex* program;
 };
 
 // A set of named constants. Members are built once, when the enum is
@@ -272,6 +283,7 @@ inline ObjChannel* asChannel(Value v) { return (ObjChannel*)asObj(v); }
 inline ObjTask* asTask(Value v) { return (ObjTask*)asObj(v); }
 inline ObjFile* asFile(Value v) { return (ObjFile*)asObj(v); }
 inline ObjSocket* asSocket(Value v) { return (ObjSocket*)asObj(v); }
+inline ObjRegex* asRegex(Value v) { return (ObjRegex*)asObj(v); }
 inline ObjNativeLib* asNativeLib(Value v) { return (ObjNativeLib*)asObj(v); }
 inline ObjEnum* asEnum(Value v) { return (ObjEnum*)asObj(v); }
 inline ObjEnumMember* asEnumMember(Value v) {
@@ -290,6 +302,7 @@ inline bool isChannel(Value v) { return isObjType(v, ObjType::Channel); }
 inline bool isTask(Value v) { return isObjType(v, ObjType::Task); }
 inline bool isFile(Value v) { return isObjType(v, ObjType::File); }
 inline bool isSocket(Value v) { return isObjType(v, ObjType::Socket); }
+inline bool isRegex(Value v) { return isObjType(v, ObjType::Regex); }
 inline bool isEnum(Value v) { return isObjType(v, ObjType::Enum); }
 inline bool isEnumMember(Value v) { return isObjType(v, ObjType::EnumMember); }
 inline bool isError(Value v) { return isObjType(v, ObjType::Error); }

@@ -56,6 +56,8 @@ class Runtime {
   ObjTask* newTask();
   ObjFile* newFile(FILE* handle, ObjString* path);
   ObjSocket* newSocket(int fd, bool listening);
+  // Takes ownership of the compiled program.
+  ObjRegex* newRegex(Regex* program);
   ObjNativeLib* newNativeLib(void* handle, ObjString* path);
   ObjError* newError(ObjString* message, ObjString* trace, Value payload,
                      ObjString* kind);

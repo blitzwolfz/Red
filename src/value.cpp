@@ -170,6 +170,10 @@ std::string objectString(Obj* obj, bool quoteStrings, int depth) {
       ObjSocket* s = (ObjSocket*)obj;
       return "<socket " + std::to_string(s->fd) + ">";
     }
+    case ObjType::Regex: {
+      ObjRegex* r = (ObjRegex*)obj;
+      return "<regex " + r->program->pattern() + ">";
+    }
     case ObjType::NativeLib: {
       ObjNativeLib* l = (ObjNativeLib*)obj;
       return "<lib " + std::string(l->path->chars, l->path->length) + ">";
@@ -277,6 +281,7 @@ const char* objectTypeName(Obj* obj) {
     case ObjType::Task: return "task";
     case ObjType::File: return "file";
     case ObjType::Socket: return "socket";
+    case ObjType::Regex: return "regex";
     case ObjType::NativeLib: return "lib";
     case ObjType::Error: return "error";
   }
