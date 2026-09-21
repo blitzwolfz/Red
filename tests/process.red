@@ -49,7 +49,7 @@ print(run(["sh", "-c", "kill -TERM $$"])["code"]); // expect: 143
 
 // Output larger than one pipe buffer still all arrives, on both streams
 // at once, which is what a single read loop over the two is for.
-const big = run(["sh", "-c", "yes hello | head -20000; yes oops | head -20000 1>&2"]);
+const big = run(["sh", "-c", "yes hello 2>/dev/null | head -20000; yes oops 2>/dev/null | head -20000 1>&2"]);
 print(big["out"].split("\n").len()); // expect: 20001
 print(big["err"].split("\n").len()); // expect: 20001
 
