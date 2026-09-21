@@ -26,7 +26,7 @@ namespace red {
 
 namespace {
 
-constexpr const char* kVersion = "0.2.0";
+constexpr const char* kVersion = "0.3.0";
 
 // Exit codes follow the same convention as v1: 65 for a program that did
 // not compile, 70 for one that failed while running.

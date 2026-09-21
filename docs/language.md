@@ -797,7 +797,19 @@ print(task.join());        // 81
 ```
 
 `join` waits for the task and gives back its result. If the task failed,
-`join` raises that error in the joining task.
+`join` raises the error the task raised, with the kind and payload it was
+raised with, so a `catch` clause around the join is the same one that
+would have worked had the call been direct.
+
+```red
+fun read(path) { throw error("cannot read '${path}'", path, "io"); }
+
+try {
+  spawn read("data.txt").join();
+} catch (e: "io") {
+  print(e.message, e.payload);
+}
+```
 
 A channel passes values between tasks.
 

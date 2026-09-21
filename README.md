@@ -124,6 +124,16 @@ try {
   print(e.message, e.payload["field"]);
 }
 
+// text is characters, data is bytes
+print("h\u00e9llo".char_len(), "h\u00e9llo".len());   // 5 6
+
+// regular expressions, with no way to make one take exponential time
+const stamp = regex("(\\d{4})-(\\d{2})-(\\d{2})");
+print(stamp.find("due 2024-02-29")["groups"]);    // ["2024", "02", "29"]
+
+// running another program, with the arguments passed through untouched
+print(run(["git", "rev-parse", "HEAD"])["out"].trim());
+
 // modules
 import "util.red" as util;
 
@@ -217,10 +227,11 @@ const lib = ffi_open("mathx.so");
 print(lib.sym("mathx_hypot")(3, 4));      // 5
 ```
 
-[`lib/cli.red`](lib/cli.red) is a library written entirely in Red.
-[`lib/crc32.red`](lib/crc32.red) is one with both halves: Red that works
-on its own, and a C++ extension it uses when one is installed.
-[docs/libraries.md](docs/libraries.md) covers writing either.
+[`lib/cli.red`](lib/cli.red) and [`lib/json.red`](lib/json.red) are
+written entirely in Red. [`lib/crc32.red`](lib/crc32.red) has both
+halves: Red that works on its own, and a C++ extension it uses when one
+is installed. [docs/libraries.md](docs/libraries.md) covers writing
+either.
 
 ## The compiler, in Red
 
@@ -360,6 +371,8 @@ print(output.split("\n").len());
 | [docs/design.md](docs/design.md) | Why it is built this way, and what was rejected. |
 | [docs/bytecode.md](docs/bytecode.md) | The instruction set and the compiled file format. |
 | [docs/bootstrapping.md](docs/bootstrapping.md) | How the C++ dependency is being removed. |
+| [docs/native.md](docs/native.md) | Whether to leave the virtual machine, and why not yet. |
+| [CHANGELOG.md](CHANGELOG.md) | What changed, and what it breaks. |
 | [selfhost/README.md](selfhost/README.md) | The compiler written in Red, and how to bootstrap it. |
 
 ## Known limits
@@ -372,18 +385,17 @@ print(output.split("\n").len());
 - Code that makes many distinct strings is slow, because every string is
   interned. Reusing a small vocabulary is fast.
 - A task that is never joined is kept alive until the program ends.
-- An error thrown inside a task reaches `join()` as kind `"task"` with
-  the original message wrapped, so the kind and payload do not survive
-  the boundary. Return failure as a value instead:
-  [guide.md](docs/guide.md#8-doing-it-in-parallel).
 - An instance is a map key by identity, not by value. A class can define
   `eq()` for `==`, but not how it hashes, because the table cannot call
   back into Red while it is probing.
   [Why](docs/language.md#str-and-eq).
-- `upper()` and `lower()` only change ASCII letters.
+- `upper()`, `lower()` and the regex `i` flag only change ASCII letters.
+- Regular expressions have no backreferences and no lookaround, which is
+  the price of never taking exponentially long.
+  [Why](docs/stdlib.md#regular-expressions).
 - POSIX only. It builds on macOS and Linux; there is no Windows port.
-- No regular expressions, no JSON and no subprocesses in the standard
-  library. The first two can be written in Red.
+- No language server, no formatter, no debugger beyond `--trace`.
+  Syntax highlighting is in [editors/](editors).
 - The virtual machine, the collector and the standard library are still
   C++. Only the compiler is self-hosted.
 - There is no package manager. A library is installed by copying it onto

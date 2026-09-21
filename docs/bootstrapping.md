@@ -224,6 +224,14 @@ and it is a much bigger project than everything above it put together.
 self-hosted languages stop here. The compiler is written in itself, the
 runtime is not. Saying so plainly is better than claiming more.
 
+[native.md](native.md) works through all three with measurements rather
+than intuition, and lands on the third: the dispatch loop is not where
+the time goes, so a native backend buys 10 to 20% for a year of work,
+while the changes it would need anyway — inline caches, cheaper strings,
+a smaller value — are worth more on their own and can be done one at a
+time. It also argues that a C backend, if one ever happens, is the one
+worth having, and for distribution rather than for speed.
+
 ## Order of work
 
 Stages 1, 2 and 3 are finished. Stage 4 should only start once stage 3 is

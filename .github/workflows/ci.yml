@@ -89,6 +89,8 @@ jobs:
           ./build/red compile lib/crc32.red -o build/crc32.redc
           printf 'import "crc32.redc" as c;\nprint(c.of("hello"));\n' > /tmp/lib.red
           ./build/red /tmp/lib.red
+          printf 'import "json.red" as j;\nprint(j.stringify(j.parse("[1,2]")));\n' > /tmp/j.red
+          ./build/red /tmp/j.red
 
       - name: Disassembler
         run: ./build/red disasm examples/tiny.red

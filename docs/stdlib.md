@@ -308,8 +308,101 @@ Task methods:
 
 | Method | Result |
 |---|---|
-| `join()` | Waits, then gives the result. Raises if the task failed. |
+| `join()` | Waits, then gives the result. Raises what the task raised if it failed. |
 | `is_done()` | Has it finished? Does not wait. |
+
+## Regular expressions
+
+| Function | Result |
+|---|---|
+| `regex(pattern)` | A compiled pattern. |
+| `regex(pattern, flags)` | The same, with `i`, `m` and `s` in any order. |
+
+| Flag | |
+|---|---|
+| `i` | Ignore case. ASCII letters only, the same place `upper()` stops. |
+| `m` | `^` and `$` also meet a line break. |
+| `s` | `.` also meets a newline. |
+
+| Method | Result |
+|---|---|
+| `test(text)` `test(text, from)` | Is there a match? |
+| `find(text)` `find(text, from)` | The first match as a map, or `nil`. |
+| `find_all(text)` | Every match, as an array of maps. |
+| `replace(text, with)` | Every match replaced. `$1` to `$9` are the groups, `$0` the whole match, `$$` a dollar. |
+| `replace(text, with, count)` | The same, stopping after `count`. |
+| `split(text)` | The pieces between matches. A capture group in the pattern is kept. |
+| `pattern()` `flags()` `groups()` | What it was built from, and how many groups it has. |
+
+A match is a map with `start` and `end` as byte offsets, `text` for what
+was matched, and `groups` for what each group caught, with `nil` for a
+group that took no part.
+
+```red
+const date = regex("(\\d{4})-(\\d{2})-(\\d{2})");
+const found = date.find("due 2024-02-29 at noon");
+print(found["text"]);              // 2024-02-29
+print(found["groups"]);            // ["2024", "02", "29"]
+print(found["start"]);             // 4
+print(date.replace("2024-02-29", "$3/$2/$1"));   // 29/02/2024
+```
+
+Supported: `.` `*` `+` `?` `{n}` `{n,}` `{n,m}`, the lazy forms `*?`
+`+?` `??`, `|`, groups `( )` and `(?: )`, classes `[a-z]` `[^a-z]`, the
+shorthands `\d \w \s \D \W \S`, the anchors `^ $ \b \B`, and `\u` for a
+code point. Patterns work in characters, not bytes, so `.` matches one
+character however many bytes it takes.
+
+**Not supported: backreferences and lookaround.** They are what make a
+pattern stop being regular, and supporting them means backtracking, and
+backtracking means a pattern like `(a+)+b` can take longer than the age
+of the universe on forty characters. This engine follows every
+alternative at the same time instead, so every pattern runs in time
+proportional to the length of the text. `(a+)+b` against five thousand
+characters finishes in a millisecond here.
+
+A pattern that cannot be compiled raises an error with kind `"regex"`
+saying what was wrong, rather than failing to match at run time.
+
+## Running other programs
+
+| Function | Result |
+|---|---|
+| `run(argv)` | Runs a program. `argv` is an array: the program, then its arguments. |
+| `run(argv, input)` | The same, with `input` on its standard input. |
+| `shell(command)` | Runs the text through `/bin/sh`. |
+| `shell(command, input)` | The same, with input. |
+| `which(name)` | Where a program is, or `nil`. |
+
+Both give back a map with `code`, `out` and `err`.
+
+```red
+const result = run(["git", "rev-parse", "HEAD"]);
+if (result["code"] != 0) {
+  eprint(result["err"].trim());
+  exit(1);
+}
+print(result["out"].trim());
+```
+
+**Prefer `run` to `shell`.** `run` hands the array to the operating
+system as it stands: nothing is split, expanded or quoted, so a value
+that came from outside the program is an argument and can never become
+another command.
+
+```red
+run(["echo", untrusted]);        // always one argument
+shell("echo " + untrusted);      // whatever the shell makes of it
+```
+
+`shell` is for when a pipeline, a glob or a redirection is what was
+actually wanted. The runtime lock is released while either waits, so
+other tasks keep running.
+
+A program that cannot be started at all raises an error with kind
+`"process"`, which is different from one that started and exited
+non-zero. A program killed by a signal reports `128` plus the signal
+number, the way a shell does.
 
 ## Network
 
