@@ -9,7 +9,7 @@ if exists("b:current_syntax")
   finish
 endif
 
-syn keyword redKeyword     and or not in as
+syn keyword redKeyword     and or not in as is
 syn keyword redConditional if else switch case default
 syn keyword redRepeat      for while
 syn keyword redStatement   break continue return throw spawn import
@@ -18,8 +18,9 @@ syn keyword redDeclaration let const fun class enum
 syn keyword redBoolean     true false
 syn keyword redConstant    nil PI E
 syn keyword redSelf        this super
+syn keyword redType        Any Array Bool Error Fun Int Map Nil Num Set String
 
-syn keyword redBuiltin print write eprint ewrite type str repr num int len
+syn keyword redBuiltin print write eprint ewrite type type_of str repr num int len
 syn keyword redBuiltin chr char set range input assert error exit
 syn keyword redBuiltin abs floor ceil round sign sqrt pow exp log min max
 syn keyword redBuiltin sin cos tan asin acos atan hypot rand rand_seed

@@ -426,7 +426,9 @@ These are real and they are not hidden:
 - Two tasks cannot compute at the same time. See
   [Concurrency](#concurrency).
 - The collector stops the world and does not move objects.
-- Type annotations are parsed and ignored.
+- Type checking is one pass deep. There is no tree to walk, so the
+  compiler knows the type of what is written in front of it and nothing
+  further. The rest is checked at run time.
 - Optimisation is limited to peephole constant folding, because there is
   no intermediate form to run a real pass over.
 - Code that builds many distinct strings is still the slowest thing here,

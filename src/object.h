@@ -45,6 +45,9 @@ enum class ObjType : uint8_t {
   Regex,
   NativeLib,
   Error,
+  // Added after the first release, so it goes on the end: the method
+  // tables in stdlib/registry.cpp are indexed by these numbers.
+  Type,
 };
 
 struct Obj {
@@ -105,9 +108,14 @@ struct ObjFunction {
   Chunk chunk;
   ObjString* name;
   ObjModule* module;
-  // Type annotations are parsed and kept for the disassembler and for
-  // error messages. Nothing checks them. This is deliberate, see the
-  // non-goals in PRD.md.
+  // What the parameters were called and what they were declared to be,
+  // one entry each, in order. A rest parameter has an empty type.
+  //
+  // Both are part of the function's interface rather than debug
+  // information, so both survive into a compiled file: an annotation
+  // that fails should name the parameter the same way whether the
+  // program was run from source or from a .redc.
+  std::vector<std::string> paramNames;
   std::vector<std::string> paramTypes;
   std::string returnType;
   // Where each local lives and what it was called, for `red debug`.
@@ -283,6 +291,48 @@ struct ObjError {
   ObjString* kind;
 };
 
+// What a type describes. The order is not written to disk, so it is free
+// to change; the serializer writes the name.
+enum class TypeKind : uint8_t {
+  // Matches anything, and compiles to no check at all.
+  Any,
+  Nil,
+  Bool,
+  Num,
+  // A number with nothing after the point. Red has one number type, so
+  // this is a question about the value rather than about its
+  // representation.
+  Int,
+  String,
+  Array,
+  Map,
+  Set,
+  Fun,
+  Error,
+  // A class or an enum, named. Which one is not known until the program
+  // runs, because a type annotation can be written above the class it
+  // names.
+  Named,
+  // `T?`: the inner type, or nil.
+  Optional,
+};
+
+struct ObjTypeDesc {
+  Obj obj;
+  TypeKind kind;
+  // Named only.
+  ObjString* name;
+  // Array: the element type. Map: the key type then the value type.
+  // Set: the element type. Optional: the inner type. Fun: each parameter
+  // in order, then the return type last. Empty when the type was written
+  // without parameters, which makes it a question about the kind alone.
+  std::vector<ObjTypeDesc*> parts;
+  // What a Named type turned out to mean. A name binds once, so the
+  // answer is kept rather than looked up on every check.
+  Value resolved;
+  bool didResolve;
+};
+
 inline ObjString* asString(Value v) { return (ObjString*)asObj(v); }
 inline ObjFunction* asFunction(Value v) { return (ObjFunction*)asObj(v); }
 inline ObjNative* asNative(Value v) { return (ObjNative*)asObj(v); }
@@ -305,6 +355,7 @@ inline ObjEnumMember* asEnumMember(Value v) {
   return (ObjEnumMember*)asObj(v);
 }
 inline ObjError* asError(Value v) { return (ObjError*)asObj(v); }
+inline ObjTypeDesc* asTypeDesc(Value v) { return (ObjTypeDesc*)asObj(v); }
 
 inline bool isString(Value v) { return isObjType(v, ObjType::String); }
 inline bool isClosure(Value v) { return isObjType(v, ObjType::Closure); }
@@ -321,6 +372,22 @@ inline bool isRegex(Value v) { return isObjType(v, ObjType::Regex); }
 inline bool isEnum(Value v) { return isObjType(v, ObjType::Enum); }
 inline bool isEnumMember(Value v) { return isObjType(v, ObjType::EnumMember); }
 inline bool isError(Value v) { return isObjType(v, ObjType::Error); }
+inline bool isTypeDesc(Value v) { return isObjType(v, ObjType::Type); }
+
+// Anything a call expression can be applied to. A class counts, because
+// calling one builds an instance.
+inline bool isCallable(Value v) {
+  if (!isObj(v)) return false;
+  switch (asObj(v)->type) {
+    case ObjType::Closure:
+    case ObjType::Native:
+    case ObjType::Class:
+    case ObjType::BoundMethod:
+      return true;
+    default:
+      return false;
+  }
+}
 
 // Values allowed as map keys. A number, a bool, nil, a string or an enum
 // member compares by value. An instance compares by identity: two

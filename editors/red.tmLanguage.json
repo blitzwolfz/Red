@@ -119,7 +119,11 @@
         },
         {
           "name": "keyword.operator.word.red",
-          "match": "\\b(and|or)\\b"
+          "match": "\\b(and|or|is)\\b"
+        },
+        {
+          "name": "support.type.red",
+          "match": "\\b(Any|Array|Bool|Error|Fun|Int|Map|Nil|Num|Set|String)\\b"
         },
         {
           "name": "storage.type.red",

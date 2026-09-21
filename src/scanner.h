@@ -33,6 +33,7 @@ enum class TokenType {
   Ampersand, Pipe, Caret, Tilde, LessLess, GreaterGreater,
   PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual,
   In, Switch, Case, Default, Ellipsis, Enum, Finally,
+  Question, Is,
 
   Error, Eof,
 };

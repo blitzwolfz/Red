@@ -22,7 +22,7 @@
 
 // Version of the compiled file format. Must match kBytecodeVersion in
 // src/common.h.
-const BYTECODE_VERSION = 3;
+const BYTECODE_VERSION = 4;
 
 // Instructions, in the order src/chunk.h declares them. The numbering is
 // the format, so members are never reordered, only appended.
@@ -42,7 +42,8 @@ enum Op {
   Dup, Dup2,
   BitAnd, BitOr, BitXor, BitNot, ShiftLeft, ShiftRight,
   IterPrep, IterNext, JumpIfArg, CatchMatches,
-  DestructureIndex, DestructureRest, DestructureField
+  DestructureIndex, DestructureRest, DestructureField,
+  CheckType, CheckLocal, Is
 }
 
 // ---------------------------------------------------------------------
@@ -67,11 +68,12 @@ enum Tok {
   Ampersand, Pipe, Caret, Tilde, LessLess, GreaterGreater,
   PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual,
   In, Switch, Case, Default, Ellipsis, Enum, Finally,
+  Question, Is,
 
   Error, Eof
 }
 
-const TOKEN_KINDS = 72;
+const TOKEN_KINDS = 74;
 
 // Binding power, weakest first. These are plain numbers rather than enum
 // members because binary() needs `precedence + 1`.
@@ -133,7 +135,8 @@ fun keywordTable() {
     "continue": Tok.Continue, "default": Tok.Default, "else": Tok.Else,
     "enum": Tok.Enum, "false": Tok.False, "finally": Tok.Finally,
     "for": Tok.For, "fun": Tok.Fun, "if": Tok.If, "import": Tok.Import,
-    "in": Tok.In, "let": Tok.Let, "nil": Tok.Nil, "or": Tok.Or,
+    "in": Tok.In, "is": Tok.Is, "let": Tok.Let, "nil": Tok.Nil,
+    "or": Tok.Or,
     "return": Tok.Return, "spawn": Tok.Spawn, "super": Tok.Super,
     "switch": Tok.Switch, "this": Tok.This, "throw": Tok.Throw,
     "true": Tok.True, "try": Tok.Try, "while": Tok.While,
@@ -426,6 +429,7 @@ class Scanner {
         return this.make(Tok.Dot);
       }
       case ":": return this.make(Tok.Colon);
+      case "?": return this.make(Tok.Question);
       case "%": {
         if (this.match("=")) { return this.make(Tok.PercentEqual); }
         return this.make(Tok.Percent);
@@ -489,6 +493,9 @@ const C_STRING = 4;
 const C_FUNCTION = 5;
 const C_ENUM = 6;
 const C_ENUM_REFERENCE = 7;
+// A type, written as its canonical spelling. See src/types.h: the text is
+// the whole description, so the compiler never builds a type tree.
+const C_TYPE = 8;
 
 class Constant {
   init(tag, value) {
@@ -511,6 +518,73 @@ fun boolConstant(value) {
 }
 fun numberConstant(value) { return Constant(C_NUMBER, value); }
 fun stringConstant(value) { return Constant(C_STRING, value); }
+fun typeConstantValue(text) { return Constant(C_TYPE, text); }
+
+// The simple type names, in the order src/object.h declares TypeKind.
+const SIMPLE_TYPE_NAMES = ["Any", "Nil", "Bool", "Num", "Int", "String",
+  "Array", "Map", "Set", "Fun", "Error"];
+
+// Can a literal be measured against this type without running the
+// program? Mirrors typeIsStaticallyKnown() in src/types.cpp: everything
+// but a class or enum name is settled by the spelling alone, and those
+// are bound while the program runs.
+fun typeIsStaticallyKnown(text) {
+  let bare = text;
+  if (bare.ends_with("?")) { bare = bare.sub(0, bare.len() - 1); }
+  if (bare.starts_with("[") or bare.starts_with("{") or
+    bare.starts_with("fun(") or bare.starts_with("Set[")) {
+    return true;
+  }
+  return SIMPLE_TYPE_NAMES.index_of(bare) >= 0;
+}
+
+// Why this constant does not fit this type, or nil when it does or when
+// the answer has to wait for the program to run. The wording matches
+// typeMatches() in src/types.cpp, because both compilers have to reject
+// the same programs and say the same thing about them.
+fun whyLiteralMisfits(text, constant) {
+  if (constant == nil or !typeIsStaticallyKnown(text)) { return nil; }
+
+  let bare = text;
+  const optional = bare.ends_with("?");
+  if (optional) {
+    if (constant.tag == C_NIL) { return nil; }
+    bare = bare.sub(0, bare.len() - 1);
+  }
+
+  let fits = false;
+  if (bare == "Any") { fits = true; }
+  else if (bare == "Nil") { fits = constant.tag == C_NIL; }
+  else if (bare == "Bool") {
+    fits = constant.tag == C_TRUE or constant.tag == C_FALSE;
+  } else if (bare == "Num") { fits = constant.tag == C_NUMBER; }
+  else if (bare == "String") { fits = constant.tag == C_STRING; }
+  else if (bare == "Int") {
+    if (constant.tag == C_NUMBER) {
+      const value = constant.value;
+      // A whole number, and finite. Int asks about the value, because
+      // Red has one number type.
+      if (value == floor(value) and value - value == 0) { return nil; }
+      return "expected Int, got the number " + str(value);
+    }
+  }
+  // Everything left is a container or a function type, which no literal
+  // the compiler can see ever fits.
+
+  if (fits) { return nil; }
+  return "expected " + text + ", got " + constantTypeName(constant);
+}
+
+// What valueTypeName() in src/value.cpp calls this kind of value.
+fun constantTypeName(constant) {
+  switch (constant.tag) {
+    case C_NIL: return "nil";
+    case C_TRUE, C_FALSE: return "bool";
+    case C_NUMBER: return "number";
+    case C_STRING: return "string";
+    default: return "object";
+  }
+}
 
 // An enum built while compiling and stored whole in the constant pool, so
 // that declaring one costs nothing at run time.
@@ -546,6 +620,7 @@ class Proto {
     this.hasRest = false;
     this.returnType = "";
     this.paramTypes = [];
+    this.paramNames = [];
     this.code = [];
     // Source lines as runs of [line, count] rather than one entry per
     // byte, the way src/chunk.cpp stores them.
@@ -733,6 +808,9 @@ class Writer {
     this.word(proto.paramTypes.len());
     for (let type in proto.paramTypes) { this.text(type); }
 
+    this.word(proto.paramNames.len());
+    for (let name in proto.paramNames) { this.text(name); }
+
     this.word(proto.code.len());
     this.raw(proto.code);
 
@@ -755,6 +833,10 @@ class Writer {
       }
       case C_STRING: {
         this.byte(C_STRING);
+        this.text(constant.value);
+      }
+      case C_TYPE: {
+        this.byte(C_TYPE);
         this.text(constant.value);
       }
       case C_FUNCTION: {
@@ -802,13 +884,19 @@ class Local {
     this.depth = depth;
     this.isCaptured = isCaptured;
     this.isConst = isConst;
+    // What it was declared to be, canonically spelled, or "". Kept so
+    // that assigning to it is checked the same way declaring it was.
+    this.declaredType = "";
   }
 }
 
 class Upvalue {
-  init(index, isLocal) {
+  init(index, isLocal, declaredType) {
     this.index = index;
     this.isLocal = isLocal;
+    // Carried down from the local this captures, so assigning through a
+    // closure is checked like assigning directly.
+    this.declaredType = declaredType;
   }
 }
 
@@ -880,6 +968,16 @@ class FunctionState {
     this.maxLocals = 0;
     this.maxTemps = 0;
     this.nestDepth = 0;
+    // Annotated parameters, as [slot, type]. Checked together once the
+    // whole list is parsed, because a default value is compiled where it
+    // is written and would otherwise be checked before it ran.
+    this.paramChecks = [];
+    // One constant per distinct type spelling in this function. A type is
+    // a value, so it lives in the constant pool, and writing `Num` twice
+    // should not put it there twice.
+    this.typeConstants = {};
+    // The return type, canonically spelled, or "".
+    this.returnType = "";
   }
 }
 
@@ -935,6 +1033,15 @@ class Compiler {
     this.classState = nil;
     // Names declared const at module level. Checked while compiling only.
     this.constGlobals = set();
+    // Declared types of module level names, so assigning to one is
+    // checked as well as declaring it. Only names from this file, which
+    // is as far as one pass over one module can see.
+    this.globalTypes = {};
+    // Where the last known value was pushed, and what it was, so that a
+    // literal that cannot fit its annotation is reported while
+    // compiling.
+    this.lastPush = -1;
+    this.lastPushConstant = nil;
     // Set while parsing the callee of `spawn`, so the argument list is
     // left for the spawn form itself to consume. It applies only to the
     // callee's own top level; every construct that opens a bracket clears
@@ -987,6 +1094,7 @@ class Compiler {
     rules[Tok.Tilde.value] = [this.unary, nil, P_NONE];
     rules[Tok.LessLess.value] = [nil, this.binary, P_SHIFT];
     rules[Tok.GreaterGreater.value] = [nil, this.binary, P_SHIFT];
+    rules[Tok.Is.value] = [nil, this.isExpr, P_COMPARISON];
     return rules;
   }
 
@@ -1097,7 +1205,9 @@ class Compiler {
     this.emitShort(offset);
   }
 
-  emitReturn() {
+  // `written` says whether the program wrote this return or the compiler
+  // is closing a body that ran off its end.
+  emitReturn(written) {
     if (this.state.kind == K_INITIALIZER) {
       // An initializer always answers with the instance, whatever the
       // body did, so `let a = Animal("cat")` never yields nil by mistake.
@@ -1105,6 +1215,12 @@ class Compiler {
       this.emitByte(0);
     } else {
       this.emitOp(Op.Nil);
+      // Running off the end of a function that promised to return
+      // something is exactly what an annotation is there to catch, so the
+      // implicit nil is checked like any other returned value. Not while
+      // compiling though: this instruction is unreachable in a function
+      // whose every path returns.
+      this.emitTypeCheck2(this.state.returnType, written);
     }
     this.emitOp(Op.Return);
   }
@@ -1123,6 +1239,8 @@ class Compiler {
     this.emitOp(Op.Constant);
     this.emitShort(this.makeConstant(constant));
     this.lastConstant = offset;
+    this.lastPush = this.chunk().code.len();
+    this.lastPushConstant = constant;
   }
 
   constantAt(offset) {
@@ -1278,7 +1396,7 @@ class Compiler {
     return -1;
   }
 
-  addUpvalue(state, index, isLocal) {
+  addUpvalue(state, index, isLocal, declaredType) {
     const count = state.proto.upvalueCount;
     for (let i in range(0, count)) {
       if (state.upvalues[i].index == index and
@@ -1290,7 +1408,7 @@ class Compiler {
       this.error("Too many closure variables in function.");
       return 0;
     }
-    state.upvalues.push(Upvalue(index, isLocal));
+    state.upvalues.push(Upvalue(index, isLocal, declaredType));
     state.proto.upvalueCount += 1;
     return count;
   }
@@ -1300,13 +1418,19 @@ class Compiler {
 
     const local = this.resolveLocal(state.enclosing, name);
     if (local != -1) {
-      state.enclosing.locals[local].isCaptured = true;
-      return this.addUpvalue(state, local, true);
+      const captured = state.enclosing.locals[local];
+      captured.isCaptured = true;
+      return this.addUpvalue(state, local, true, captured.declaredType);
     }
     // Not a direct parent local, so look further out. Each level adds one
-    // hop, which is what makes deeply nested closures work.
+    // hop, which is what makes deeply nested closures work. The declared
+    // type travels with it, so a name annotated three functions out is
+    // still checked here.
     const upvalue = this.resolveUpvalue(state.enclosing, name);
-    if (upvalue != -1) { return this.addUpvalue(state, upvalue, false); }
+    if (upvalue != -1) {
+      return this.addUpvalue(state, upvalue, false,
+        state.enclosing.upvalues[upvalue].declaredType);
+    }
     return -1;
   }
 
@@ -1325,20 +1449,26 @@ class Compiler {
     let getOp = nil;
     let setOp = nil;
     let isConstLocal = false;
+    // An annotation is meant to hold for as long as the name does, so an
+    // assignment is checked with the type the declaration gave it.
+    let declared = "";
     let arg = this.resolveLocal(this.state, name);
     if (arg != -1) {
       getOp = Op.GetLocal;
       setOp = Op.SetLocal;
       isConstLocal = this.state.locals[arg].isConst;
+      declared = this.state.locals[arg].declaredType;
     } else {
       arg = this.resolveUpvalue(this.state, name);
       if (arg != -1) {
         getOp = Op.GetUpvalue;
         setOp = Op.SetUpvalue;
+        declared = this.state.upvalues[arg].declaredType;
       } else {
         arg = this.identifierConstant(name);
         getOp = Op.GetGlobal;
         setOp = Op.SetGlobal;
+        if (this.globalTypes.has(name)) { declared = this.globalTypes[name]; }
       }
     }
 
@@ -1354,11 +1484,13 @@ class Compiler {
       if (isGlobal) { this.emitShort(arg); } else { this.emitByte(arg); }
       this.expression();
       this.emitOp(compound);
+      this.emitTypeCheck(declared);
       this.emitOp(setOp);
       if (isGlobal) { this.emitShort(arg); } else { this.emitByte(arg); }
     } else if (canAssign and this.match(Tok.Equal)) {
       if (isConstBinding) { this.error("Cannot assign to a const binding."); }
       this.expression();
+      this.emitTypeCheck(declared);
       this.emitOp(setOp);
       if (isGlobal) { this.emitShort(arg); } else { this.emitByte(arg); }
     } else {
@@ -1374,18 +1506,129 @@ class Compiler {
     return this.matchCompound();
   }
 
-  // Consumes an optional `: Type` annotation and gives back its text.
+  // Consumes an optional `: Type` annotation and gives back its canonical
+  // spelling, or "" when there was no annotation.
   typeAnnotation() {
     if (!this.match(Tok.Colon)) { return ""; }
-    this.consume(Tok.Identifier, "Expect a type name after ':'.");
-    let name = this.previous.lexeme;
-    // Allow array-of and map-of spellings such as `[Int]` without giving
-    // them meaning. Nothing checks annotations.
-    while (this.match(Tok.LeftBracket)) {
-      this.consume(Tok.RightBracket, "Expect ']' in type name.");
-      name += "[]";
+    return this.typeText();
+  }
+
+  // Reads a type, with the ':' or '->' already consumed. The canonical
+  // spelling is the whole of what a type is as far as the compiler and
+  // the compiled file are concerned; src/types.cpp reads it back.
+  typeText() {
+    let text = "";
+
+    if (this.match(Tok.LeftBracket)) {
+      text = "[" + this.typeText() + "]";
+      this.consume(Tok.RightBracket, "Expect ']' after an element type.");
+    } else if (this.match(Tok.LeftBrace)) {
+      const key = this.typeText();
+      this.consume(Tok.Colon,
+        "Expect ':' between a key type and a value type.");
+      text = "{" + key + ": " + this.typeText() + "}";
+      this.consume(Tok.RightBrace, "Expect '}' after a map type.");
+    } else if (this.match(Tok.Fun)) {
+      text = "fun(";
+      this.consume(Tok.LeftParen, "Expect '(' after 'fun' in a type.");
+      if (!this.check(Tok.RightParen)) {
+        let first = true;
+        for (;;) {
+          if (!first) { text += ", "; }
+          first = false;
+          text += this.typeText();
+          if (!this.match(Tok.Comma)) { break; }
+        }
+      }
+      this.consume(Tok.RightParen, "Expect ')' after parameter types.");
+      // The return type is always part of the canonical spelling, so a
+      // function type written without one returns Any.
+      text += ") -> ";
+      if (this.match(Tok.Arrow)) { text += this.typeText(); }
+      else { text += "Any"; }
+    } else {
+      this.consume(Tok.Identifier, "Expect a type.");
+      text = this.previous.lexeme;
+      // Set is the one named type that takes a parameter. Arrays and maps
+      // have brackets of their own.
+      if (text == "Set" and this.match(Tok.LeftBracket)) {
+        text += "[" + this.typeText() + "]";
+        this.consume(Tok.RightBracket, "Expect ']' after an element type.");
+      }
     }
-    return name;
+
+    // `T?` admits nil as well, and writing it twice says nothing more
+    // than writing it once.
+    let optional = false;
+    while (this.match(Tok.Question)) { optional = true; }
+    if (optional and text != "Any" and text[text.len() - 1] != "?") {
+      text += "?";
+    }
+    return text;
+  }
+
+  // Records what a name was declared to be, for the assignments that
+  // come later.
+  noteDeclaredType(name, text) {
+    if (text == "") { return; }
+    if (this.state.scopeDepth > 0) {
+      if (this.state.locals.len() > 0) {
+        this.state.locals[this.state.locals.len() - 1].declaredType = text;
+      }
+      return;
+    }
+    this.globalTypes[name] = text;
+  }
+
+  // The constant holding this type, adding it the first time the
+  // spelling turns up in this function. Gives -1 when there is nothing
+  // to name.
+  typeConstant(text) {
+    if (text == "") { return -1; }
+    const seen = this.state.typeConstants;
+    if (seen.has(text)) { return seen[text]; }
+    const index = this.makeConstant(typeConstantValue(text));
+    seen[text] = index;
+    return index;
+  }
+
+  // Emits a check on the value at the top of the stack, which stays
+  // where it is.
+  emitTypeCheck(text) { this.emitTypeCheck2(text, true); }
+
+  // `reportLiteral` is false where the value is one the compiler put
+  // there rather than one the program wrote, which is the implicit nil
+  // at the end of a function. That instruction is often unreachable, so
+  // failing it while compiling would reject working programs.
+  emitTypeCheck2(text, reportLiteral) {
+    // Any is what an unannotated name already means, so it needs no
+    // check and no constant.
+    if (text == "" or text == "Any") { return; }
+    const constant = this.typeConstant(text);
+
+    // A literal that cannot fit is a mistake in the program rather than
+    // something that might work on some run, so it is reported now. See
+    // typeIsStaticallyKnown() in src/types.cpp for where the line falls.
+    if (reportLiteral and this.lastPush == this.chunk().code.len()) {
+      const reason = whyLiteralMisfits(text, this.lastPushConstant);
+      if (reason != nil) { this.error(reason + "."); }
+    }
+
+    this.emitOp(Op.CheckType);
+    this.emitShort(constant);
+  }
+
+  // `x is T`. The right side is a type, read the same way an annotation
+  // is, so `x is [Num]` can be written as well as `x is Point`.
+  isExpr(canAssign) {
+    // Unlike an annotation this always needs the type on the stack, so
+    // even Any goes into the pool.
+    const constant = this.typeConstant(this.typeText());
+    if (constant < 0) { return; }
+    this.emitOp(Op.Constant);
+    this.emitShort(constant);
+    this.emitOp(Op.Is);
+    this.noteTemps(2);
   }
 
   // Clears the spawn guard for one nested construct and gives back the
@@ -1545,10 +1788,13 @@ class Compiler {
       return;
     }
     const global = this.parseVariable("Expect a variable name.", isConst);
-    this.typeAnnotation();
+    const name = this.previous.lexeme;
+    const declared = this.typeAnnotation();
+    this.noteDeclaredType(name, declared);
 
     if (this.match(Tok.Equal)) {
       this.expression();
+      this.emitTypeCheck(declared);
     } else if (isConst) {
       this.error("A const binding must have an initializer.");
       this.emitOp(Op.Nil);
@@ -1721,6 +1967,7 @@ class Compiler {
           // follow it.
           const restConstant =
           this.parseVariable("Expect a name after '...'.", false);
+          state.proto.paramNames.push(this.previous.lexeme);
           state.proto.paramTypes.push("");
           this.defineVariable(restConstant, false);
           state.proto.hasRest = true;
@@ -1732,8 +1979,15 @@ class Compiler {
           this.errorAtCurrent("Cannot have more than 255 parameters.");
         }
         const constant = this.parseVariable("Expect a parameter name.", false);
+        const paramName = this.previous.lexeme;
+        state.proto.paramNames.push(paramName);
         const annotation = this.typeAnnotation();
+        this.noteDeclaredType(paramName, annotation);
         state.proto.paramTypes.push(annotation);
+        if (annotation != "" and annotation != "Any") {
+          // Slot zero is the receiver, so the first parameter is slot one.
+          state.paramChecks.push([state.proto.maxArity, annotation]);
+        }
         this.defineVariable(constant, false);
 
         if (this.match(Tok.Equal)) {
@@ -1763,14 +2017,23 @@ class Compiler {
     this.consume(Tok.RightParen, "Expect ')' after parameters.");
 
     if (this.match(Tok.Arrow)) {
-      this.consume(Tok.Identifier, "Expect a return type name after '->'.");
-      state.proto.returnType = this.previous.lexeme;
+      state.returnType = this.typeText();
+      state.proto.returnType = state.returnType;
+    }
+
+    // Every annotated parameter is checked here, after the defaults, so
+    // that a default value is checked like anything else arriving in
+    // that slot.
+    for (let check in state.paramChecks) {
+      this.emitOp(Op.CheckLocal);
+      this.emitByte(check[0]);
+      this.emitShort(this.typeConstant(check[1]));
     }
 
     this.consume(Tok.LeftBrace, "Expect '{' before a function body.");
     this.block();
 
-    this.emitReturn();
+    this.emitReturn(false);
     state.proto.slotCount = state.maxLocals + state.maxTemps + 8;
     this.state = state.enclosing;
 
@@ -1890,9 +2153,11 @@ class Compiler {
         return;
       }
       const global = this.declareParsedVariable(name, false);
-      this.typeAnnotation();
+      const declared = this.typeAnnotation();
+      this.noteDeclaredType(name, declared);
       if (this.match(Tok.Equal)) {
         this.expression();
+        this.emitTypeCheck(declared);
       } else {
         this.emitOp(Op.Nil);
       }
@@ -2213,7 +2478,7 @@ class Compiler {
 
     if (this.match(Tok.Semicolon)) {
       if (this.state.finallys.len() == 0) {
-        this.emitReturn();
+        this.emitReturn(true);
         return;
       }
       // Leaving through a finally carries the value on the stack, so the
@@ -2223,6 +2488,7 @@ class Compiler {
         this.emitByte(0);
       } else {
         this.emitOp(Op.Nil);
+        this.emitTypeCheck(this.state.returnType);
       }
       this.exitThroughFinally(F_RETURN, true);
       return;
@@ -2232,6 +2498,7 @@ class Compiler {
       this.error("Cannot return a value from an initializer.");
     }
     this.expression();
+    this.emitTypeCheck(this.state.returnType);
     this.consume(Tok.Semicolon, "Expect ';' after a return value.");
     if (this.state.finallys.len() == 0) {
       this.emitOp(Op.Return);
@@ -2499,10 +2766,21 @@ class Compiler {
 
   literal(canAssign) {
     switch (this.previous.type) {
-      case Tok.False: this.emitOp(Op.False);
-      case Tok.Nil: this.emitOp(Op.Nil);
-      case Tok.True: this.emitOp(Op.True);
+      case Tok.False: {
+        this.emitOp(Op.False);
+        this.lastPushConstant = boolConstant(false);
+      }
+      case Tok.Nil: {
+        this.emitOp(Op.Nil);
+        this.lastPushConstant = nilConstant();
+      }
+      case Tok.True: {
+        this.emitOp(Op.True);
+        this.lastPushConstant = boolConstant(true);
+      }
+      default: return;
     }
+    this.lastPush = this.chunk().code.len();
   }
 
   variable(canAssign) { this.namedVariable(this.previous.lexeme, canAssign); }
@@ -2726,7 +3004,7 @@ class Compiler {
 
     this.advance();
     while (!this.match(Tok.Eof)) { this.declaration(); }
-    this.emitReturn();
+    this.emitReturn(false);
     state.proto.slotCount = state.maxLocals + state.maxTemps + 8;
 
     this.state = nil;

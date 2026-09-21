@@ -104,6 +104,19 @@ enum OpCode : uint8_t {
   // this never finds a method, so a pattern cannot pick one up by
   // accident, and a missing field gives nil rather than failing.
   OP_DESTRUCTURE_FIELD,
+
+  // Tests the value on top of the stack against the type in the named
+  // constant, and fails if it does not fit. The value stays, so this
+  // sits in the middle of an expression without disturbing it. Emitted
+  // wherever an annotation was written and something has to cross that
+  // boundary: a declaration's initializer, a return.
+  OP_CHECK_TYPE,
+  // The same for a local, named by slot rather than by being on top.
+  // Parameters are checked this way, all of them together once the
+  // prologue has filled in any defaults.
+  OP_CHECK_LOCAL,
+  // `x is T`. Pushes true or false; nothing ever fails.
+  OP_IS,
 };
 
 // Source lines are stored as runs rather than one int per byte. Straight

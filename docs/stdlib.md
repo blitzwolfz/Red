@@ -28,6 +28,7 @@ red report.red 2> problems.txt   # what went wrong
 | Function | Result |
 |---|---|
 | `type(value)` | The type name, as a string. |
+| `type_of(value)` | The type, as a type. See [language.md](language.md#types). |
 | `str(value)` | The value as a string, the way `print` shows it. |
 | `repr(value)` | The same, but strings keep their quotes. |
 | `num(value)` | A number, or `nil` when the whole string is not a number. |

@@ -1,5 +1,7 @@
 #include "serialize.h"
 
+#include "types.h"
+
 #include <cstring>
 #include <unordered_map>
 
@@ -20,6 +22,10 @@ enum class ConstantTag : uint8_t {
   Enum = 6,
   // One already written, named by its position.
   EnumReference = 7,
+  // A type, written as its canonical spelling and read back by the same
+  // parser the compiler uses. A type is a small tree, and writing the
+  // text keeps one description of that tree rather than two.
+  Type = 8,
 };
 
 class Writer {
@@ -159,6 +165,9 @@ bool writeFunction(Writer& writer, WriteState& state, ObjFunction* function,
   writer.word((uint32_t)function->paramTypes.size());
   for (const std::string& type : function->paramTypes) writer.text(type);
 
+  writer.word((uint32_t)function->paramNames.size());
+  for (const std::string& name : function->paramNames) writer.text(name);
+
   const Chunk& chunk = function->chunk;
   writer.word((uint32_t)chunk.code.size());
   writer.raw(chunk.code);
@@ -205,6 +214,11 @@ bool writeValue(Writer& writer, WriteState& state, Value value,
     case ObjType::Function:
       writer.byte((uint8_t)ConstantTag::Function);
       return writeFunction(writer, state, (ObjFunction*)object, reason);
+    case ObjType::Type: {
+      writer.byte((uint8_t)ConstantTag::Type);
+      writer.text(typeName((ObjTypeDesc*)object));
+      return true;
+    }
     case ObjType::Enum: {
       ObjEnum* enumeration = (ObjEnum*)object;
       auto seen = state.enums.find(enumeration);
@@ -242,6 +256,9 @@ struct ReadState {
   Runtime* runtime = nullptr;
   ObjModule* module = nullptr;
   std::vector<ObjEnum*> enums;
+  // The version this file declared. Fields added after version 3 are
+  // only read when the file is new enough to have them.
+  int version = kBytecodeVersion;
 };
 
 bool readValue(Reader& reader, ReadState& state, Value* out,
@@ -281,6 +298,21 @@ ObjFunction* readFunction(Reader& reader, ReadState& state,
       return nullptr;
     }
     function->paramTypes.push_back(type);
+  }
+
+  // Parameter names arrived with version 4, alongside the types they go
+  // with. A version 3 file has none, and a type error in one falls back
+  // to naming the position.
+  if (state.version >= 4) {
+    uint32_t nameCount = reader.word();
+    for (uint32_t i = 0; i < nameCount && !reader.failed(); i++) {
+      std::string name;
+      if (!reader.text(&name)) {
+        *reason = "truncated parameter name";
+        return nullptr;
+      }
+      function->paramNames.push_back(name);
+    }
   }
 
   uint32_t codeLength = reader.word();
@@ -382,6 +414,20 @@ bool readValue(Reader& reader, ReadState& state, Value* out,
       *out = objValue((Obj*)enumeration);
       return true;
     }
+    case ConstantTag::Type: {
+      std::string text;
+      if (!reader.text(&text)) {
+        *reason = "truncated type";
+        return false;
+      }
+      ObjTypeDesc* type = parseTypeText(runtime, text);
+      if (type == nullptr) {
+        *reason = "'" + text + "' is not a type";
+        return false;
+      }
+      *out = objValue((Obj*)type);
+      return true;
+    }
     case ConstantTag::EnumReference: {
       uint32_t index = reader.word();
       if (index >= state.enums.size()) {
@@ -422,8 +468,12 @@ ObjFunction* readCompiled(Runtime& runtime, const std::string& bytes,
   }
 
   Reader reader(bytes, sizeof(kCompiledMagic));
+  // Version 4 added the type constant. Nothing else about the layout
+  // moved, and a version 3 file cannot contain one, so files from before
+  // types still load and run with their annotations unchecked, which is
+  // what they were compiled to mean.
   uint32_t version = reader.fixed();
-  if ((int)version != kBytecodeVersion) {
+  if ((int)version != kBytecodeVersion && version != 3) {
     *reason = "built for bytecode version " + std::to_string(version) +
               ", this build reads version " + std::to_string(kBytecodeVersion) +
               ". Compile it again from source.";
@@ -433,6 +483,7 @@ ObjFunction* readCompiled(Runtime& runtime, const std::string& bytes,
   ReadState state;
   state.runtime = &runtime;
   state.module = module;
+  state.version = (int)version;
   return readFunction(reader, state, reason);
 }
 

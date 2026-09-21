@@ -9,6 +9,7 @@
 #include "debug.h"
 #include "debugger.h"
 #include "serialize.h"
+#include "types.h"
 #include "stdlib/builtins.h"
 #include "util.h"
 
@@ -1515,6 +1516,45 @@ InterpretResult VM::runLoop(int baseFrame) {
         uint8_t index = READ_BYTE();
         uint16_t offset = READ_SHORT();
         if ((int)index < frame->argCount) frame->ip += offset;
+        break;
+      }
+
+      case OP_CHECK_TYPE: {
+        ObjTypeDesc* type = asTypeDesc(READ_CONSTANT());
+        std::string reason;
+        if (!typeMatches(runtime_, currentModule(), type, peek(0), &reason)) {
+          FAULT_AS("type", "%s.", reason.c_str())
+        }
+        break;
+      }
+
+      case OP_CHECK_LOCAL: {
+        uint8_t slot = READ_BYTE();
+        ObjTypeDesc* type = asTypeDesc(READ_CONSTANT());
+        std::string reason;
+        if (!typeMatches(runtime_, currentModule(), type, frame->slots[slot],
+                         &reason)) {
+          // Named by the parameter rather than by the slot, since the
+          // person reading this wrote a name and not a number. Slot zero
+          // is the receiver, so the first parameter is slot one.
+          const std::vector<std::string>& names =
+              frame->closure->function->paramNames;
+          std::string who = "argument " + std::to_string((int)slot);
+          if (slot >= 1 && (size_t)(slot - 1) < names.size()) {
+            who = "'" + names[slot - 1] + "'";
+          }
+          FAULT_AS("type", "%s: %s.", who.c_str(), reason.c_str())
+        }
+        break;
+      }
+
+      case OP_IS: {
+        Value type = pop();
+        Value subject = pop();
+        std::string ignored;
+        push(boolValue(isTypeDesc(type) &&
+                       typeMatches(runtime_, currentModule(), asTypeDesc(type),
+                                   subject, &ignored)));
         break;
       }
 

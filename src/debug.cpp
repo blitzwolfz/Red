@@ -160,6 +160,15 @@ size_t disassembleInstruction(const Chunk& chunk, size_t offset) {
       return shortInstruction("DESTRUCTURE_REST", chunk, offset);
     case OP_DESTRUCTURE_FIELD:
       return constantInstruction("DESTRUCTURE_FIELD", chunk, offset);
+    case OP_CHECK_TYPE: return constantInstruction("CHECK_TYPE", chunk, offset);
+    case OP_CHECK_LOCAL: {
+      uint8_t slot = chunk.code[offset + 1];
+      uint16_t constant = readShort(chunk, offset + 2);
+      std::printf("%-18s %4d : %s\n", "CHECK_LOCAL", slot,
+                  valueToDisplay(chunk.constants[constant]).c_str());
+      return offset + 4;
+    }
+    case OP_IS: return simpleInstruction("IS", offset);
     case OP_JUMP_IF_ARG: {
       uint8_t index = chunk.code[offset + 1];
       uint16_t jump = readShort(chunk, offset + 2);
@@ -194,6 +203,7 @@ size_t instructionLength(const Chunk& chunk, size_t offset) {
     case OP_METHOD:
     case OP_IMPORT:
     case OP_DESTRUCTURE_FIELD:
+    case OP_CHECK_TYPE:
     case OP_ARRAY:
     case OP_MAP:
     case OP_DESTRUCTURE_INDEX:
@@ -208,6 +218,7 @@ size_t instructionLength(const Chunk& chunk, size_t offset) {
     case OP_INVOKE:
     case OP_SUPER_INVOKE:
     case OP_JUMP_IF_ARG:
+    case OP_CHECK_LOCAL:
       return 4;
 
     case OP_ITER_NEXT:

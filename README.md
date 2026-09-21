@@ -55,7 +55,7 @@ Then:
 Full reference: [docs/language.md](docs/language.md).
 
 ```red
-// let and const, with optional type hints that nothing checks
+// let and const, with optional types that are checked
 let count = 0;
 const limit: Int = 10;
 
@@ -68,6 +68,10 @@ const names = ["ann", "bob"];
 const ages = {"ann": 31, "bob": 25};
 for (let name in names) { print(name, ages[name]); }
 print(names.map(fun (n) { return ages[n]; }));
+
+// types are values: ask for one, or ask a question about one
+fun area(w: Num, h: Num) -> Num { return w * h; }
+print(type_of(3), 3 is Int, [1, 2] is [Num]);
 
 // enums, with names that survive into error messages
 enum Status { Ok = 200, NotFound = 404 }
@@ -434,7 +438,9 @@ print(output.split("\n").len());
   What tasks buy is waiting in parallel, not computing in parallel.
   [Why](docs/design.md#concurrency).
 - The collector stops the world and does not move objects.
-- Type annotations are parsed and ignored.
+- Type checking is one pass deep. A literal that cannot fit its
+  annotation is caught while compiling; everything else is caught when
+  the value arrives. [Why](docs/language.md#types).
 - Code that builds many distinct strings is still the slowest thing here,
   though less so than it was.
 - A task that is never joined is kept alive until the program ends.

@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include "../util.h"
+#include "../types.h"
 #include "../vm.h"
 
 namespace red {
@@ -11,7 +12,7 @@ namespace {
 
 // One table per object type. A method call on a built-in type is a single
 // probe into the table for that type.
-constexpr int kObjTypeCount = (int)ObjType::Error + 1;
+constexpr int kObjTypeCount = (int)ObjType::Type + 1;
 Table* g_methodTables = nullptr;
 std::string g_executablePath;
 
@@ -98,6 +99,11 @@ void installBuiltins(Runtime& runtime) {
   for (int i = 0; i < kObjTypeCount; i++) {
     runtime.rootTables.push_back(&g_methodTables[i]);
   }
+
+  // Types exist before anything else, because the simple ones are
+  // shared and a global like `Num` is one of them.
+  installTypes(runtime);
+  installTypeNames(runtime);
 
   installCore(runtime);
   installIO(runtime);

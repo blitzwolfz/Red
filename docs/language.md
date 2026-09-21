@@ -88,17 +88,85 @@ let x = "outer";
 print(x);          // outer
 ```
 
-### Type annotations
+### Types
 
-Any name can carry a type. Nothing checks it. It is there for the reader
-and for the disassembler.
+Any name can carry a type, and the type is checked.
 
 ```red
 let attempts: Int = 0;
-fun area(width: Float, height: Float) -> Float {
+fun area(width: Num, height: Num) -> Num {
   return width * height;
 }
 ```
+
+An annotation is a promise about the name, not about one value, so it is
+checked wherever something crosses it: where the name is declared, where
+it is assigned, where an argument arrives and where a value is returned.
+A name with no annotation is `Any` and is never checked.
+
+| Type | Matches |
+|---|---|
+| `Any` | Anything. Compiles to no check at all. |
+| `Nil` | Only `nil`. |
+| `Bool` | `true` and `false`. |
+| `Num` | Any number. |
+| `Int` | A number with nothing after the point. |
+| `String` | Any string. |
+| `Array` `Map` `Set` `Fun` `Error` | That kind of value, whatever is inside it. |
+| `[T]` | An array whose every element is `T`. |
+| `{K: V}` | A map whose keys are `K` and values `V`. |
+| `Set[T]` | A set whose every member is `T`. |
+| `fun(A, B) -> C` | Something callable with that shape. |
+| `T?` | `T`, or `nil`. |
+| `Point` | An instance of that class, or of one derived from it. |
+| `Colour` | A member of that enum. |
+
+Red has one number type, so `Int` is a question about the value rather
+than about how it is stored. `3` is an `Int`, `3.5` is not, and both are
+`Num`.
+
+A type is an ordinary value. `Num` is a name that evaluates to
+something, `type_of(x)` hands one back, and `x is T` asks the question
+directly.
+
+```red
+print(type_of(3));          // Int
+print(3 is Num);            // true
+print([1, 2] is [Num]);     // true
+print([1, "x"] is [Num]);   // false
+print(nil is String?);      // true
+```
+
+**What it costs.** A bare container name costs one comparison: `Array`
+asks whether the value is an array and stops. An element type costs a
+walk, because `[Num]` would mean no more than `Array` if it did not
+check the elements. That is worth knowing before putting one on a hot
+path. An unannotated name costs nothing at all, and neither does `Any`.
+
+**What is caught while compiling.** A literal that cannot fit is
+reported by the compiler:
+
+```red
+let count: Int = 1.5;   // Error: expected Int, got the number 1.5.
+```
+
+That is as far as it goes. The compiler makes one pass and builds no
+tree, so it knows the type of what is written in front of it and not the
+type of what a call will return. Everything else is caught when the
+value arrives, with the line and the call stack to say where it came
+from:
+
+```red
+fun area(width: Num, height: Num) -> Num { return width * height; }
+area(read_file("w"), 3);
+// Runtime error: 'width': expected Num, got string.
+```
+
+Both are the same check. The compiler runs it early when it can.
+
+A class or enum name is bound while the program runs, so a value
+measured against one always waits for the check at run time, even when
+it is a literal.
 
 ## Strings
 
@@ -193,6 +261,12 @@ print(1 << 8);         // 256
 print(-16 >> 2);       // -4
 print(~0);             // -1
 ```
+
+`x is T` asks whether a value fits a type, and answers `true` or
+`false` without ever failing. It binds like a comparison, so
+`a is Num and b is Num` groups the way it reads. The right side is a
+type rather than an expression, which is what lets `x is [Num]` be
+written.
 
 ### Compound assignment
 
@@ -886,8 +960,14 @@ parameters     -> parameter ( "," parameter )* ( "," restParam )?
                 | restParam
 parameter      -> IDENT annotation? ( "=" expression )?
 restParam      -> "..." IDENT
-annotation     -> ":" IDENT ( "[" "]" )*
-returnType     -> "->" IDENT
+annotation     -> ":" type
+returnType     -> "->" type
+type           -> typeAtom "?"*
+typeAtom       -> IDENT
+                | IDENT "[" type "]"
+                | "[" type "]"
+                | "{" type ":" type "}"
+                | "fun" "(" ( type ( "," type )* )? ")" returnType?
 
 statement      -> exprStmt | ifStmt | whileStmt | forStmt | forInStmt
                 | switchStmt | returnStmt | breakStmt | continueStmt
@@ -962,6 +1042,15 @@ no form for one.
 ```
 and    as       break  case   catch  class   const  continue
 default else    enum   false  finally for    fun    if
-import in      let     nil    or      return spawn  super
-this   throw   true    try    switch  while
+import in      is      let    nil     or     return spawn
+super  this    throw   true   try     switch while
+```
+
+The type names are ordinary globals rather than reserved words, so a
+program may shadow one. Doing so makes that spelling unavailable as a
+type in the rest of the file, which is reason enough not to.
+
+```
+Any    Array  Bool   Error  Fun    Int    Map    Nil
+Num    Set    String
 ```

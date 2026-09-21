@@ -72,6 +72,10 @@ class Runtime {
   ObjNativeLib* newNativeLib(void* handle, ObjString* path);
   ObjError* newError(ObjString* message, ObjString* trace, Value payload,
                      ObjString* kind);
+  // A type. `parts` is moved in, so a caller that built them into a
+  // vector has to keep those rooted until this returns.
+  ObjTypeDesc* newTypeDesc(TypeKind kind, ObjString* name,
+                           std::vector<ObjTypeDesc*> parts);
 
   // ---- garbage collection -----------------------------------------
   void collectGarbage();
@@ -120,6 +124,12 @@ class Runtime {
   // The kind given to an error raised by the runtime when nothing more
   // specific fits.
   ObjString* runtimeKind = nullptr;
+
+  // One object per type that takes no parameters, indexed by TypeKind, so
+  // that every `Num` written anywhere is the same object. Named,
+  // Optional and the parameterised containers are not in here, since
+  // those differ by what is inside them.
+  std::vector<ObjTypeDesc*> simpleTypes;
 
   // Tables owned by the standard library that hold live objects. They are
   // registered here so the collector can treat them as roots without the

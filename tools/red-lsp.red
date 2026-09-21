@@ -239,8 +239,15 @@ fun builtinHelp() {
 const KEYWORDS = [
   "and", "as", "break", "case", "catch", "class", "const", "continue",
   "default", "else", "enum", "false", "finally", "for", "fun", "if",
-  "import", "in", "let", "nil", "or", "return", "spawn", "super",
+  "import", "in", "is", "let", "nil", "or", "return", "spawn", "super",
   "switch", "this", "throw", "true", "try", "while",
+];
+
+// The type names that are always in scope. A class or an enum is a type
+// too, but those are named by the program rather than by the language.
+const TYPE_NAMES = [
+  "Any", "Array", "Bool", "Error", "Fun", "Int", "Map", "Nil", "Num",
+  "Set", "String",
 ];
 
 // ---------------------------------------------------------------------
@@ -315,6 +322,9 @@ class Server {
     if (shown == nil and KEYWORDS.contains(word)) {
       shown = "${word} is a keyword";
     }
+    if (shown == nil and TYPE_NAMES.contains(word)) {
+      shown = "${word} is a type";
+    }
     if (shown == nil) {
       respond(output, id, nil);
       return;
@@ -340,6 +350,13 @@ class Server {
     for (let word in KEYWORDS) {
       if (seen.has(word)) { continue; }
       out.push({"label": word, "kind": 14});
+    }
+    for (let name in TYPE_NAMES) {
+      if (seen.has(name)) { continue; }
+      seen.add(name);
+      // 25 is a type parameter in the protocol's list, which is the
+      // closest thing it has to "a type".
+      out.push({"label": name, "kind": 25});
     }
     respond(output, id, out);
   }

@@ -315,6 +315,21 @@ ObjNativeLib* Runtime::newNativeLib(void* handle, ObjString* path) {
   return lib;
 }
 
+ObjTypeDesc* Runtime::newTypeDesc(TypeKind kind, ObjString* name,
+                                  std::vector<ObjTypeDesc*> parts) {
+  pushRoot((Obj*)name);
+  for (ObjTypeDesc* part : parts) pushRoot((Obj*)part);
+  ObjTypeDesc* type = NEW_OBJECT(ObjTypeDesc, Type);
+  type->kind = kind;
+  type->name = name;
+  type->parts = std::move(parts);
+  type->resolved = nilValue();
+  type->didResolve = false;
+  for (size_t i = 0; i < type->parts.size(); i++) popRoot();
+  popRoot();
+  return type;
+}
+
 ObjError* Runtime::newError(ObjString* message, ObjString* trace,
                             Value payload, ObjString* kind) {
   pushRoot((Obj*)message);
@@ -406,6 +421,7 @@ void Runtime::markRoots() {
   markObject((Obj*)eqString);
   markObject((Obj*)runtimeKind);
   markObject((Obj*)mainModule);
+  for (ObjTypeDesc* type : simpleTypes) markObject((Obj*)type);
 }
 
 void Runtime::blackenObject(Obj* obj) {
@@ -521,6 +537,13 @@ void Runtime::blackenObject(Obj* obj) {
       markObject((Obj*)error->trace);
       markObject((Obj*)error->kind);
       markValue(error->payload);
+      break;
+    }
+    case ObjType::Type: {
+      ObjTypeDesc* type = (ObjTypeDesc*)obj;
+      markObject((Obj*)type->name);
+      for (ObjTypeDesc* part : type->parts) markObject((Obj*)part);
+      markValue(type->resolved);
       break;
     }
   }
@@ -646,6 +669,10 @@ void Runtime::freeObject(Obj* obj) {
     case ObjType::Error:
       bytesAllocated -= sizeof(ObjError);
       delete (ObjError*)obj;
+      break;
+    case ObjType::Type:
+      bytesAllocated -= sizeof(ObjTypeDesc);
+      delete (ObjTypeDesc*)obj;
       break;
   }
 }

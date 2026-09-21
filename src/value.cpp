@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "object.h"
+#include "types.h"
 
 namespace red {
 
@@ -183,6 +184,8 @@ std::string objectString(Obj* obj, bool quoteStrings, int depth) {
       ObjError* e = (ObjError*)obj;
       return "Error: " + std::string(e->message->chars, e->message->length);
     }
+    case ObjType::Type:
+      return typeName((ObjTypeDesc*)obj);
   }
   return "<object>";
 }
@@ -298,6 +301,7 @@ const char* objectTypeName(Obj* obj) {
     case ObjType::Regex: return "regex";
     case ObjType::NativeLib: return "lib";
     case ObjType::Error: return "error";
+    case ObjType::Type: return "type";
   }
   return "object";
 }

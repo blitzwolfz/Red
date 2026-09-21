@@ -30,7 +30,7 @@ const std::unordered_map<std::string, TokenType>& keywords() {
       {"and", TokenType::And},       {"as", TokenType::As},
       {"case", TokenType::Case},     {"default", TokenType::Default},
       {"enum", TokenType::Enum},     {"finally", TokenType::Finally},
-      {"in", TokenType::In},
+      {"in", TokenType::In},         {"is", TokenType::Is},
       {"switch", TokenType::Switch},
       {"break", TokenType::Break},   {"catch", TokenType::Catch},
       {"class", TokenType::Class},   {"const", TokenType::Const},
@@ -282,6 +282,7 @@ Token Scanner::scan() {
       }
       return make(TokenType::Dot);
     case ':': return make(TokenType::Colon);
+    case '?': return make(TokenType::Question);
     case '%':
       return make(match('=') ? TokenType::PercentEqual : TokenType::Percent);
     case '-':

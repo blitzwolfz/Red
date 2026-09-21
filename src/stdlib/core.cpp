@@ -7,6 +7,7 @@
 #include <ctime>
 #include <random>
 
+#include "../types.h"
 #include "../unicode.h"
 #include "../util.h"
 #include "../vm.h"
@@ -116,6 +117,13 @@ Value nativeInt(VM& vm, int, Value* args) {
   double value;
   if (!wantNumber(vm, args[0], "int()", &value)) return nilValue();
   return numberValue(std::trunc(value));
+}
+
+// The type of a value, as a value. Built fresh each time, so two calls
+// give two objects that describe the same thing; compare them with == or
+// ask the question directly with `is`.
+Value nativeTypeOf(VM& vm, int, Value* args) {
+  return objValue((Obj*)typeOf(vm.runtime(), args[0]));
 }
 
 Value nativeLen(VM& vm, int, Value* args) {
@@ -1271,6 +1279,7 @@ void installCore(Runtime& runtime) {
   defineGlobalFn(runtime, "repr", nativeRepr, 1);
   defineGlobalFn(runtime, "num", nativeNum, 1);
   defineGlobalFn(runtime, "int", nativeInt, 1);
+  defineGlobalFn(runtime, "type_of", nativeTypeOf, 1);
   defineGlobalFn(runtime, "len", nativeLen, 1);
   defineGlobalFn(runtime, "assert", nativeAssert, -1);
   defineGlobalFn(runtime, "error", nativeError, -1);

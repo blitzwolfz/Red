@@ -12,7 +12,7 @@ namespace red {
 
 // Bumped whenever the bytecode layout changes in a way that breaks
 // previously written chunks. docs/bytecode.md tracks the history.
-constexpr int kBytecodeVersion = 3;
+constexpr int kBytecodeVersion = 4;
 
 // Maximum call depth before the VM reports a stack overflow instead of
 // smashing the host stack. A recursive descent parser written in Red

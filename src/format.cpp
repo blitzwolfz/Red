@@ -39,7 +39,8 @@ bool isKeyword(const std::string& word) {
   static const char* kWords[] = {
       "and",   "as",    "break", "case",    "catch", "class",  "const",
       "continue", "default", "else", "enum", "false", "finally", "for",
-      "fun",   "if",    "import", "in",    "let",   "nil",    "or",
+      "fun",   "if",    "import", "in",    "is",    "let",    "nil",
+      "or",
       "return", "spawn", "super", "switch", "this",  "throw",  "true",
       "try",   "while"};
   for (const char* candidate : kWords) {
@@ -291,9 +292,42 @@ bool opensMapLiteral(const Token* previous) {
          p == "%=";
 }
 
+// Is the `fun` at `index` the head of a function type rather than an
+// anonymous function? The two are written differently: a type is tight,
+// `fun(Num) -> Num`, and a function is not, `fun (x) { ... }`.
+//
+// What settles it is the token after the closing bracket. An anonymous
+// function has to have a body there, so a brace means a function and
+// anything else means a type. Looking at what comes before instead would
+// get `{"sub": fun (a, b) { ... }}` wrong, where the colon belongs to
+// the map rather than to a type.
+bool funOpensType(const std::vector<Token>& tokens, size_t index) {
+  int depth = 0;
+  for (size_t i = index + 1; i < tokens.size(); i++) {
+    const std::string& text = tokens[i].text;
+    if (tokens[i].kind == Piece::Comment) continue;
+    if (text == "(") {
+      depth++;
+    } else if (text == ")") {
+      depth--;
+      if (depth == 0) {
+        // The next piece of code after the closing bracket.
+        for (size_t k = i + 1; k < tokens.size(); k++) {
+          if (tokens[k].kind == Piece::Comment) continue;
+          return tokens[k].text != "{";
+        }
+        return true;
+      }
+    } else if (depth == 0) {
+      return false;
+    }
+  }
+  return false;
+}
+
 // Should there be a space between these two tokens on one line?
 bool wantsSpace(const Token& left, const Token& right, bool rightIsUnary,
-                bool insideMap) {
+                bool insideMap, bool leftIsTypeFun) {
   const std::string& a = left.text;
   const std::string& b = right.text;
 
@@ -317,7 +351,10 @@ bool wantsSpace(const Token& left, const Token& right, bool rightIsUnary,
   // A call binds to the name in front of it; a keyword that takes a
   // clause does not, and `fun (` is the anonymous form.
   if (b == "(") {
-    if (left.kind == Piece::Word) return takesClause(a) || a == "fun";
+    if (left.kind == Piece::Word) {
+      if (a == "fun") return !leftIsTypeFun;
+      return takesClause(a);
+    }
     if (a == ")" || a == "]") return false;
     // An operator, a comma or an `=`: `x = (a | b)`.
     return true;
@@ -330,6 +367,9 @@ bool wantsSpace(const Token& left, const Token& right, bool rightIsUnary,
     if (a == ")" || a == "]") return false;
     return true;
   }
+
+  // `T?` is one thing, so nothing comes between them.
+  if (b == "?") return false;
 
   // A colon: none before, one after. That covers a map key, a type
   // annotation, a case label and a catch filter alike.
@@ -406,6 +446,8 @@ std::string render(const std::vector<Token>& tokens) {
   int depth = 0;
   bool lineStarted = false;
   const Token* previous = nullptr;
+  // Where `previous` sits, for the rules that need to look further.
+  int previousIndex = -1;
   bool previousWasUnary = false;
   // One entry per open brace. A switch body indents its statements one
   // further than its case labels, which no brace of its own marks out.
@@ -460,7 +502,11 @@ std::string render(const std::vector<Token>& tokens) {
       if (token.text == "}" || previous->text == "{") {
         insideMap = !braces.empty() && braces.back() == Brace::Map;
       }
-      if (wantsSpace(*previous, token, previousWasUnary, insideMap)) {
+      bool leftIsTypeFun = previous->kind == Piece::Word &&
+                           previous->text == "fun" && previousIndex >= 0 &&
+                           funOpensType(tokens, (size_t)previousIndex);
+      if (wantsSpace(*previous, token, previousWasUnary, insideMap,
+                     leftIsTypeFun)) {
         line += ' ';
       }
     }
@@ -496,6 +542,7 @@ std::string render(const std::vector<Token>& tokens) {
 
     previousWasUnary = isUnaryHere(previous, token);
     previous = &token;
+    previousIndex = (int)i;
   }
   endLine();
 

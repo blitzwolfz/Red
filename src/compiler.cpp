@@ -3,10 +3,12 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "debug.h"
 #include "scanner.h"
+#include "types.h"
 
 namespace red {
 
@@ -44,11 +46,19 @@ struct Local {
   bool isConst;
   // Where this local's entry sits in the function's debug table.
   int debugIndex = -1;
+  // What it was declared to be, canonically spelled, or empty. Kept so
+  // that assigning to it is checked the same way declaring it was: an
+  // annotation is meant to hold for the life of the name, not only for
+  // the value it started with.
+  std::string declaredType;
 };
 
 struct CompilerUpvalue {
   uint8_t index;
   bool isLocal;
+  // Carried down from the local this captures, so that assigning
+  // through a closure is checked like assigning directly.
+  std::string declaredType;
 };
 
 // One per try statement being compiled. Every way out of a try routes
@@ -137,6 +147,16 @@ struct FunctionState {
   int maxLocals = 0;
   int maxTemps = 0;
   int nestDepth = 0;
+  // Annotated parameters, as slot and canonical type. Checked together
+  // once the whole list is parsed, because a default value is compiled
+  // where it is written and would otherwise be checked before it ran.
+  std::vector<std::pair<int, std::string>> paramChecks;
+  // One constant per distinct type spelling in this function. A type is
+  // a value, so it has to live in the constant pool, and writing `Num`
+  // twice should not put it there twice.
+  std::unordered_map<std::string, int> typeConstants;
+  // The return type, canonically spelled, or empty.
+  std::string returnType;
 };
 
 struct ClassState {
@@ -165,6 +185,15 @@ class Compiler {
   ClassState* classState_ = nullptr;
   // Names declared const at module level. Checked at compile time only.
   std::unordered_set<std::string> constGlobals_;
+  // Declared types of module level names, so that assigning to one is
+  // checked as well as declaring it. Only names from this file are in
+  // here, which is as far as one pass over one module can see.
+  std::unordered_map<std::string, std::string> globalTypes_;
+  // Where the last known value was pushed, and what it was. Used to
+  // report a literal that cannot fit its annotation at compile time
+  // rather than leaving it to the check at run time.
+  int lastPush_ = -1;
+  Value lastPushValue_ = nilValue();
   // Set while parsing the callee of `spawn`, so that the argument list is
   // left for the spawn form itself to consume. It applies only to the
   // callee's own top level, so any nested context clears it with the
@@ -213,7 +242,9 @@ class Compiler {
   int emitJump(uint8_t instruction);
   void patchJump(int offset);
   void emitLoop(int loopStart);
-  void emitReturn();
+  // `written` says whether the program wrote this return or the
+  // compiler is closing a body that ran off its end.
+  void emitReturn(bool written = false);
   int makeConstant(Value value);
   void emitConstant(Value value);
   // Offset of the last OP_CONSTANT emitted, or -1 when the last thing
@@ -248,12 +279,37 @@ class Compiler {
   void defineVariable(int global, bool isConst);
   int resolveLocal(FunctionState* state, const std::string& name);
   int resolveUpvalue(FunctionState* state, const std::string& name);
-  int addUpvalue(FunctionState* state, uint8_t index, bool isLocal);
+  int addUpvalue(FunctionState* state, uint8_t index, bool isLocal,
+                 const std::string& declaredType);
   // Takes the name by value on purpose. It usually comes from
   // previous_.lexeme, and match() below overwrites that token.
   void namedVariable(std::string name, bool canAssign);
-  // Consumes an optional `: Type` annotation and returns its text.
+  // Consumes an optional `: Type` annotation and returns its canonical
+  // spelling, or nothing when there was no annotation.
   std::string typeAnnotation();
+  // Reads a type, with the ':' or '->' already consumed. Returns the
+  // canonical spelling, which is the only form of a type the rest of the
+  // compiler and the compiled file ever see.
+  std::string typeText();
+  // The constant holding this type, adding it if this is the first time
+  // the spelling appears in this function. Returns -1 for a type that
+  // needs no check.
+  int typeConstant(const std::string& text);
+  // Emits a check on the value at the top of the stack, which stays
+  // where it is. Does nothing when the type admits everything.
+  // `reportLiteral` is false where the value is one the compiler put
+  // there rather than one the program wrote, which is the implicit nil
+  // at the end of a function. That instruction is often unreachable, so
+  // failing it at compile time would reject working programs.
+  void emitTypeCheck(const std::string& text, bool reportLiteral = true);
+  // Records what a name was declared to be, for the assignments that
+  // come later.
+  void noteDeclaredType(const std::string& name, const std::string& text);
+  // The value the last instruction pushed, when a single pass can know
+  // it: a literal, or a constant the folder has already worked out.
+  // Returns false when the value only exists at run time, which is most
+  // of the time.
+  bool lastPushedValue(Value* out) const;
 
   // ---- declarations and statements ----
   void declaration();
@@ -296,6 +352,10 @@ class Compiler {
 
   // ---- expressions ----
   void expression();
+  // `x is T`. The right side is a type, read at compile time the same
+  // way an annotation is, so `x is [Num]` can be written as well as
+  // `x is Point`.
+  void isExpr(bool canAssign);
   void parsePrecedence(Precedence precedence);
   uint8_t argumentList();
   // Matches a compound assignment operator such as "+=" and reports the
@@ -434,7 +494,7 @@ void Compiler::emitLoop(int loopStart) {
   emitShort(offset);
 }
 
-void Compiler::emitReturn() {
+void Compiler::emitReturn(bool written) {
   if (state_->kind == FunctionKind::Initializer) {
     // An initializer always answers with the instance, whatever the body
     // did, so `let a = Animal("cat")` never yields nil by accident.
@@ -442,6 +502,14 @@ void Compiler::emitReturn() {
     emitByte(0);
   } else {
     emitByte(OP_NIL);
+    // Running off the end of a function that promised to return
+    // something is exactly the mistake an annotation is there to catch,
+    // so the implicit nil is checked like any other returned value.
+    //
+    // At compile time only when the program wrote the `return`. The one
+    // closing a body is unreachable in a function whose every path
+    // returns, and failing it there would reject working programs.
+    emitTypeCheck(state_->returnType, written);
   }
   emitByte(OP_RETURN);
 }
@@ -460,6 +528,8 @@ void Compiler::emitConstant(Value value) {
   emitByte(OP_CONSTANT);
   emitShort(makeConstant(value));
   lastConstant_ = offset;
+  lastPush_ = (int)chunk().code.size();
+  lastPushValue_ = value;
 }
 
 Value Compiler::constantAt(int offset) const {
@@ -649,7 +719,8 @@ int Compiler::resolveLocal(FunctionState* state, const std::string& name) {
   return -1;
 }
 
-int Compiler::addUpvalue(FunctionState* state, uint8_t index, bool isLocal) {
+int Compiler::addUpvalue(FunctionState* state, uint8_t index, bool isLocal,
+                         const std::string& declaredType) {
   int count = state->function->upvalueCount;
   for (int i = 0; i < count; i++) {
     if (state->upvalues[i].index == index &&
@@ -663,6 +734,7 @@ int Compiler::addUpvalue(FunctionState* state, uint8_t index, bool isLocal) {
   }
   state->upvalues[count].isLocal = isLocal;
   state->upvalues[count].index = index;
+  state->upvalues[count].declaredType = declaredType;
   return state->function->upvalueCount++;
 }
 
@@ -671,31 +743,44 @@ int Compiler::resolveUpvalue(FunctionState* state, const std::string& name) {
 
   int local = resolveLocal(state->enclosing, name);
   if (local != -1) {
-    state->enclosing->locals[(size_t)local].isCaptured = true;
-    return addUpvalue(state, (uint8_t)local, true);
+    Local& captured = state->enclosing->locals[(size_t)local];
+    captured.isCaptured = true;
+    return addUpvalue(state, (uint8_t)local, true, captured.declaredType);
   }
   // Not a direct parent local, so look further out. Each level adds one
-  // hop, which is what makes deeply nested closures work.
+  // hop, which is what makes deeply nested closures work. The declared
+  // type travels along with it, so a name annotated three functions out
+  // is still checked here.
   int upvalue = resolveUpvalue(state->enclosing, name);
-  if (upvalue != -1) return addUpvalue(state, (uint8_t)upvalue, false);
+  if (upvalue != -1) {
+    return addUpvalue(state, (uint8_t)upvalue, false,
+                      state->enclosing->upvalues[upvalue].declaredType);
+  }
   return -1;
 }
 
 void Compiler::namedVariable(std::string name, bool canAssign) {
   uint8_t getOp, setOp;
   bool isConstLocal = false;
+  // An annotation is meant to hold for as long as the name does, so an
+  // assignment is checked with the type the declaration gave it.
+  std::string declared;
   int arg = resolveLocal(state_, name);
   if (arg != -1) {
     getOp = OP_GET_LOCAL;
     setOp = OP_SET_LOCAL;
     isConstLocal = state_->locals[(size_t)arg].isConst;
+    declared = state_->locals[(size_t)arg].declaredType;
   } else if ((arg = resolveUpvalue(state_, name)) != -1) {
     getOp = OP_GET_UPVALUE;
     setOp = OP_SET_UPVALUE;
+    declared = state_->upvalues[arg].declaredType;
   } else {
     arg = identifierConstant(name);
     getOp = OP_GET_GLOBAL;
     setOp = OP_SET_GLOBAL;
+    auto known = globalTypes_.find(name);
+    if (known != globalTypes_.end()) declared = known->second;
   }
 
   bool isConstBinding =
@@ -710,11 +795,13 @@ void Compiler::namedVariable(std::string name, bool canAssign) {
     if (getOp == OP_GET_GLOBAL) emitShort(arg); else emitByte((uint8_t)arg);
     expression();
     emitByte(compound);
+    emitTypeCheck(declared);
     emitByte(setOp);
     if (setOp == OP_SET_GLOBAL) emitShort(arg); else emitByte((uint8_t)arg);
   } else if (canAssign && match(TokenType::Equal)) {
     if (isConstBinding) error("Cannot assign to a const binding.");
     expression();
+    emitTypeCheck(declared);
     emitByte(setOp);
     if (setOp == OP_SET_GLOBAL) {
       emitShort(arg);
@@ -733,15 +820,113 @@ void Compiler::namedVariable(std::string name, bool canAssign) {
 
 std::string Compiler::typeAnnotation() {
   if (!match(TokenType::Colon)) return "";
-  consume(TokenType::Identifier, "Expect a type name after ':'.");
-  std::string name = previous_.lexeme;
-  // Allow array-of and map-of spellings such as `[Int]` without giving
-  // them meaning. Nothing checks annotations.
-  while (match(TokenType::LeftBracket)) {
-    consume(TokenType::RightBracket, "Expect ']' in type name.");
-    name += "[]";
+  return typeText();
+}
+
+std::string Compiler::typeText() {
+  std::string text;
+
+  if (match(TokenType::LeftBracket)) {
+    text = "[" + typeText() + "]";
+    consume(TokenType::RightBracket, "Expect ']' after an element type.");
+  } else if (match(TokenType::LeftBrace)) {
+    std::string key = typeText();
+    consume(TokenType::Colon, "Expect ':' between a key type and a value type.");
+    text = "{" + key + ": " + typeText() + "}";
+    consume(TokenType::RightBrace, "Expect '}' after a map type.");
+  } else if (match(TokenType::Fun)) {
+    text = "fun(";
+    consume(TokenType::LeftParen, "Expect '(' after 'fun' in a type.");
+    if (!check(TokenType::RightParen)) {
+      bool first = true;
+      do {
+        if (!first) text += ", ";
+        first = false;
+        text += typeText();
+      } while (match(TokenType::Comma));
+    }
+    consume(TokenType::RightParen, "Expect ')' after parameter types.");
+    // The return type is always part of the canonical spelling, so a
+    // function type written without one is a function returning Any.
+    text += ") -> ";
+    text += match(TokenType::Arrow) ? typeText() : "Any";
+  } else {
+    consume(TokenType::Identifier, "Expect a type.");
+    text = previous_.lexeme;
+    // `Set[T]` is the one named type that takes a parameter. Arrays and
+    // maps have their own brackets, so they do not need this form.
+    if (text == "Set" && match(TokenType::LeftBracket)) {
+      text += "[" + typeText() + "]";
+      consume(TokenType::RightBracket, "Expect ']' after an element type.");
+    }
   }
-  return name;
+
+  // `T?` admits nil as well. Writing it twice says nothing more than
+  // writing it once, so the canonical form has at most one.
+  bool optional = false;
+  while (match(TokenType::Question)) optional = true;
+  if (optional && text != "Any" && text.back() != '?') text += "?";
+  return text;
+}
+
+int Compiler::typeConstant(const std::string& text) {
+  if (text.empty()) return -1;
+
+  auto seen = state_->typeConstants.find(text);
+  if (seen != state_->typeConstants.end()) return seen->second;
+
+  ObjTypeDesc* type = parseTypeText(runtime_, text);
+  if (type == nullptr) {
+    error("'" + text + "' is not a type.");
+    return -1;
+  }
+  int constant = makeConstant(objValue((Obj*)type));
+  state_->typeConstants[text] = constant;
+  return constant;
+}
+
+bool Compiler::lastPushedValue(Value* out) const {
+  // Only when the push is the last thing emitted. Anything since means
+  // the value on top came from somewhere this cannot see.
+  if (lastPush_ != (int)state_->function->chunk.code.size()) return false;
+  *out = lastPushValue_;
+  return true;
+}
+
+void Compiler::noteDeclaredType(const std::string& name,
+                                const std::string& text) {
+  if (text.empty()) return;
+  if (state_->scopeDepth > 0) {
+    if (!state_->locals.empty()) state_->locals.back().declaredType = text;
+    return;
+  }
+  globalTypes_[name] = text;
+}
+
+void Compiler::emitTypeCheck(const std::string& text, bool reportLiteral) {
+  // Any is what an unannotated name already means, so it needs no check
+  // and no constant.
+  if (text.empty() || text == "Any") return;
+  int constant = typeConstant(text);
+  if (constant < 0) return;
+
+  // A literal that cannot fit is a mistake in the program rather than
+  // something that might work on some run, so it is reported now. One
+  // pass with no tree to walk means this only reaches what is written
+  // right there; everything else is caught by the check below when the
+  // value arrives. docs/language.md says where the line falls.
+  Value literal;
+  if (reportLiteral && lastPushedValue(&literal)) {
+    ObjTypeDesc* type = asTypeDesc(chunk().constants[(size_t)constant]);
+    std::string reason;
+    if (typeIsStaticallyKnown(type) &&
+        !typeMatches(runtime_, module_, type, literal, &reason)) {
+      error(reason + ".");
+    }
+  }
+
+  emitByte(OP_CHECK_TYPE);
+  emitShort(constant);
 }
 
 // ---------------------------------------------------------------------
@@ -889,10 +1074,13 @@ void Compiler::varDeclaration(bool isConst) {
     return;
   }
   int global = parseVariable("Expect a variable name.", isConst);
-  typeAnnotation();
+  std::string name = previous_.lexeme;
+  std::string declared = typeAnnotation();
+  noteDeclaredType(name, declared);
 
   if (match(TokenType::Equal)) {
     expression();
+    emitTypeCheck(declared);
   } else if (isConst) {
     error("A const binding must have an initializer.");
     emitByte(OP_NIL);
@@ -1080,6 +1268,7 @@ void Compiler::function(FunctionKind kind, const std::string& name) {
         // A rest parameter gathers whatever is left, so nothing can
         // follow it.
         int restConstant = parseVariable("Expect a name after '...'.", false);
+        state_->function->paramNames.push_back(previous_.lexeme);
         state_->function->paramTypes.push_back("");
         defineVariable(restConstant, false);
         state_->function->hasRest = true;
@@ -1091,8 +1280,16 @@ void Compiler::function(FunctionKind kind, const std::string& name) {
         errorAtCurrent("Cannot have more than 255 parameters.");
       }
       int constant = parseVariable("Expect a parameter name.", false);
+      std::string paramName = previous_.lexeme;
+      state_->function->paramNames.push_back(paramName);
       std::string annotation = typeAnnotation();
+      noteDeclaredType(paramName, annotation);
       state_->function->paramTypes.push_back(annotation);
+      if (!annotation.empty() && annotation != "Any") {
+        // Slot zero is the receiver, so the first parameter is slot one.
+        state_->paramChecks.emplace_back(state_->function->maxArity,
+                                         annotation);
+      }
       defineVariable(constant, false);
 
       if (match(TokenType::Equal)) {
@@ -1121,8 +1318,17 @@ void Compiler::function(FunctionKind kind, const std::string& name) {
   consume(TokenType::RightParen, "Expect ')' after parameters.");
 
   if (match(TokenType::Arrow)) {
-    consume(TokenType::Identifier, "Expect a return type name after '->'.");
-    state_->function->returnType = previous_.lexeme;
+    state_->returnType = typeText();
+    state_->function->returnType = state_->returnType;
+  }
+
+  // Every annotated parameter is checked here, after the defaults, so
+  // that a default value is checked like anything else that arrives in
+  // that slot.
+  for (const auto& check : state_->paramChecks) {
+    emitByte(OP_CHECK_LOCAL);
+    emitByte((uint8_t)check.first);
+    emitShort(typeConstant(check.second));
   }
 
   consume(TokenType::LeftBrace, "Expect '{' before a function body.");
@@ -1248,9 +1454,11 @@ void Compiler::forStatement() {
       return;
     }
     int global = declareParsedVariable(name, false);
-    typeAnnotation();
+    std::string declared = typeAnnotation();
+    noteDeclaredType(name, declared);
     if (match(TokenType::Equal)) {
       expression();
+      emitTypeCheck(declared);
     } else {
       emitByte(OP_NIL);
     }
@@ -1552,7 +1760,7 @@ void Compiler::returnStatement() {
 
   if (match(TokenType::Semicolon)) {
     if (state_->finallys.empty()) {
-      emitReturn();
+      emitReturn(true);
       return;
     }
     // Leaving through a finally carries the value on the stack, so the
@@ -1562,6 +1770,7 @@ void Compiler::returnStatement() {
       emitByte(0);
     } else {
       emitByte(OP_NIL);
+      emitTypeCheck(state_->returnType);
     }
     exitThroughFinally(FinallyAction::Return, true);
     return;
@@ -1571,6 +1780,7 @@ void Compiler::returnStatement() {
     error("Cannot return a value from an initializer.");
   }
   expression();
+  emitTypeCheck(state_->returnType);
   consume(TokenType::Semicolon, "Expect ';' after a return value.");
   if (state_->finallys.empty()) {
     emitByte(OP_RETURN);
@@ -1843,11 +2053,22 @@ void Compiler::interpolation(bool) {
 
 void Compiler::literal(bool) {
   switch (previous_.type) {
-    case TokenType::False: emitByte(OP_FALSE); break;
-    case TokenType::Nil: emitByte(OP_NIL); break;
-    case TokenType::True: emitByte(OP_TRUE); break;
-    default: break;
+    case TokenType::False:
+      emitByte(OP_FALSE);
+      lastPushValue_ = boolValue(false);
+      break;
+    case TokenType::Nil:
+      emitByte(OP_NIL);
+      lastPushValue_ = nilValue();
+      break;
+    case TokenType::True:
+      emitByte(OP_TRUE);
+      lastPushValue_ = boolValue(true);
+      break;
+    default:
+      return;
   }
+  lastPush_ = (int)chunk().code.size();
 }
 
 void Compiler::variable(bool canAssign) {
@@ -1863,6 +2084,17 @@ void Compiler::unary(bool) {
     case TokenType::Tilde: emitByte(OP_BIT_NOT); break;
     default: break;
   }
+}
+
+void Compiler::isExpr(bool) {
+  // Unlike an annotation, this always needs the type on the stack, so
+  // even Any goes into the pool and OP_IS answers it like any other.
+  int constant = typeConstant(typeText());
+  if (constant < 0) return;
+  emitByte(OP_CONSTANT);
+  emitShort(constant);
+  emitByte(OP_IS);
+  noteTemps(2);
 }
 
 void Compiler::binary(bool) {
@@ -2128,6 +2360,8 @@ const ParseRule* Compiler::getRule(TokenType type) {
       /* Ellipsis     */ {nullptr, nullptr, Precedence::None},
       /* Enum         */ {nullptr, nullptr, Precedence::None},
       /* Finally      */ {nullptr, nullptr, Precedence::None},
+      /* Question     */ {nullptr, nullptr, Precedence::None},
+      /* Is           */ {nullptr, &Compiler::isExpr, Precedence::Comparison},
       /* Error        */ {nullptr, nullptr, Precedence::None},
       /* Eof          */ {nullptr, nullptr, Precedence::None},
   };
