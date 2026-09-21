@@ -270,18 +270,20 @@ the same work and their output is compared. Reproduce with
 
 | benchmark | what it measures | red | python | ratio |
 |---|---|--:|--:|--:|
-| fib | recursive calls, no allocation | 0.20s | 0.16s | 1.24x |
-| loop | tight arithmetic loop | 1.06s | 0.90s | 1.18x |
-| string | building and inspecting short strings | 0.64s | 0.11s | 5.61x |
-| alloc | allocation churn, collector bound | 0.43s | 0.29s | 1.45x |
-| method | method dispatch through inheritance | 0.43s | 0.51s | 0.85x |
+| fib | recursive calls, no allocation | 0.23s | 0.16s | 1.40x |
+| loop | tight arithmetic loop | 1.09s | 0.91s | 1.21x |
+| string | building and inspecting short strings | 0.40s | 0.11s | 3.51x |
+| alloc | allocation churn, collector bound | 0.44s | 0.29s | 1.52x |
+| method | method dispatch through inheritance | 0.45s | 0.51s | 0.87x |
 
 A ratio below 1.00 means Red was faster.
 
 Red is in the same range as CPython on calls, loops and allocation, and
-faster on method dispatch. It is about five times slower on string work,
-because every string is interned. That is a known cost of the current
-design and it is explained in [docs/design.md](docs/design.md#value-layout).
+faster on method dispatch. String work is the weak spot, at three and a
+half times slower, though it used to be five and a half: only strings of
+one or two characters are shared now, so building a long one no longer
+pays for a hash table insert it will never use again.
+[docs/design.md](docs/design.md#value-layout) has the rest.
 
 ## Architecture
 
@@ -382,8 +384,8 @@ print(output.split("\n").len());
   [Why](docs/design.md#concurrency).
 - The collector stops the world and does not move objects.
 - Type annotations are parsed and ignored.
-- Code that makes many distinct strings is slow, because every string is
-  interned. Reusing a small vocabulary is fast.
+- Code that builds many distinct strings is still the slowest thing here,
+  though less so than it was.
 - A task that is never joined is kept alive until the program ends.
 - An instance is a map key by identity, not by value. A class can define
   `eq()` for `==`, but not how it hashes, because the table cannot call

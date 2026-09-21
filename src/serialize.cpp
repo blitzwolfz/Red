@@ -338,7 +338,11 @@ bool readValue(Reader& reader, ReadState& state, Value* out,
         *reason = "truncated string constant";
         return false;
       }
-      *out = objValue((Obj*)runtime.copyString(text.data(), text.size()));
+      // Interned, not merely copied: a string constant becomes a field
+      // name, a method name or a global name, and Table compares those
+      // by pointer. A name defined in one module and used in another has
+      // to arrive as the same object.
+      *out = objValue((Obj*)runtime.internString(text));
       return true;
     }
     case ConstantTag::Function: {

@@ -174,24 +174,32 @@ Every measurement above points at the runtime rather than the loop. The
 same changes a native backend would eventually need are worth more on
 their own, sooner, and can be done one at a time:
 
-**Inline caches on property and method lookup.** A field read is 13ns and
-a method call 26ns, mostly hash probing. Cache the class and slot at each
-call site and check one pointer. This is a well understood change of
-perhaps two hundred lines, and on object-heavy code it is worth more than
-the entire native backend.
+**Inline caches on property and method lookup.** ~~A field read is 13ns
+and a method call 26ns, mostly hash probing.~~ Also tried, in the
+cheapest possible way: a single global cache entry in `invokeFromClass`,
+which is the best any per-site cache could do and then some. It made no
+measurable difference. The method lookup is not where the 26ns is; the
+call frame setup and the field read inside the method body are. A per
+site cache would have cost a parallel array the size of the bytecode and
+bought nothing.
 
-**Stop interning every string.** 297ns to build a short string is the
-worst number here by a factor of ten. Interning is a win for a small
-vocabulary and a loss for text processing, and the fix — intern on
-demand, compare by hash and contents, keep identity for the ones that
-came from the constant pool — is contained.
+That leaves the field read itself, which would need hidden classes to
+improve, and that is a much larger change than "two hundred lines".
 
-**NaN boxing.** Halves `Value` from sixteen bytes to eight, which halves
-the memory traffic of every stack push, every array, every map. The
-design notes say the tagged struct was chosen first and why; the second
-choice is still there to be made. This one does break the FFI, which is
-the argument for doing it before there are extensions in the world rather
-than after.
+**Stop interning every string.** Done, in 0.4.0, and it is the one that
+worked. Strings of one or two characters are still shared; longer ones
+are allocated outright and compare by hash and contents. Building a
+string went from 297ns to 230ns, and the `string` benchmark from 5.6
+times CPython to 3.5. Everything else stayed where it was.
+
+**NaN boxing.** ~~Halves `Value` from sixteen bytes to eight, which halves
+the memory traffic of every stack push, every array, every map.~~ Tried,
+and it made things worse: calls and arithmetic lost 5 to 12%, because a
+boxed double arrives in an integer register and every operation has to
+move it to a floating point one and back. Method dispatch gained 5%. Net,
+a loss. [design.md](design.md#value-layout) has the table. Struck out
+rather than deleted, because a prediction that turned out wrong is worth
+more on the page than a prediction quietly removed.
 
 **Computed-goto dispatch.** Replaces the switch with a jump table
 threaded through each instruction, which removes one indirect branch and
@@ -200,31 +208,33 @@ behind a compiler check. Typically 10 to 20% on dispatch-bound code,
 which is to say most of what the native backend was going to buy, for a
 day's work.
 
-That last one is worth sitting with. **A day of work on the dispatch loop
-plausibly recovers most of what a year of work on a native backend
-would.** If that is true, the native backend is not a performance project
-at all; it is a distribution project wearing a performance costume, and
-the distribution problem has a much cheaper answer.
+Three of those four have now been tried. One worked, two did not, and
+computed-goto dispatch is still untested. That is a worse hit rate than
+this file originally implied, and it sharpens the point rather than
+blunting it: if changes this targeted, guided by these measurements, are
+mostly not paying off, a native backend guided by the same measurements
+is not going to pay off either.
+
+The honest summary is that the interpreter is closer to its floor than it
+looked. Getting past that floor needs a different value representation or
+type feedback, not a different way of reaching the same runtime.
 
 ## The smallest honest experiment
 
-If the argument above is wrong, it should be cheap to find out. Before
-writing any backend:
+Steps 1 and 2 of what this file first proposed have been run, and are
+written up above: the inline cache bought nothing, NaN boxing lost.
+What is left is the one that would actually settle it:
 
-1. Add computed-goto dispatch behind a build flag. Measure `bench/`.
-2. Add an inline cache to `OP_GET_PROPERTY` and `OP_INVOKE`. Measure the
-   `method` benchmark.
-3. Take one benchmark — `loop.red` is the most favourable case — and
-   write by hand the C that a transpiler would emit for it. Compile it,
-   link it against the runtime, and time it.
+Take one benchmark — `loop.red` is the most favourable case — and write
+by hand the C that a transpiler would emit for it. Compile it, link it
+against the real runtime, and time it.
 
-Step 3 is a day and it settles the question. If hand-written best-case C
-against the real runtime is not at least 3x the interpreter, then no
-backend is going to be either, and the question is closed. If it is 5x,
-this file is wrong and worth rewriting.
+That is a day. If hand-written best-case C against the real runtime is
+not at least 3x the interpreter, no backend is going to be either, and
+the question is closed for good. If it is 5x, this file is wrong and
+worth rewriting.
 
-That experiment has not been run. Everything above is inference from the
-table, and the table only measures what the interpreter does today.
+It has not been run.
 
 ## Where this leaves stage 4
 

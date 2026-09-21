@@ -3,6 +3,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include "object.h"
 
@@ -212,14 +213,27 @@ bool valuesEqual(Value a, Value b) {
     case ValueType::Nil: return true;
     case ValueType::Bool: return asBool(a) == asBool(b);
     case ValueType::Number: return asNumber(a) == asNumber(b);
-    case ValueType::Obj: {
-      // Strings are interned, so identity is enough for them too. Every
-      // other object type uses reference equality on purpose: two arrays
-      // with equal contents are still two arrays.
-      return asObj(a) == asObj(b);
-    }
+    case ValueType::Obj: break;
   }
-  return false;
+
+  Obj* left = asObj(a);
+  Obj* right = asObj(b);
+  // The common case, and the whole of it for every type that compares by
+  // identity: two arrays with equal contents are still two arrays.
+  if (left == right) return true;
+  if (left->type != ObjType::String || right->type != ObjType::String) {
+    return false;
+  }
+
+  // Strings compare by contents. Short ones are interned and so were
+  // settled by the pointer above; longer ones are not, because interning
+  // every string a program builds costs more than it saves. The hash is
+  // stored, so this is one integer comparison in almost every case that
+  // is going to fail.
+  ObjString* x = (ObjString*)left;
+  ObjString* y = (ObjString*)right;
+  return x->hash == y->hash && x->length == y->length &&
+         std::memcmp(x->chars, y->chars, x->length) == 0;
 }
 
 uint32_t hashValue(Value v) {

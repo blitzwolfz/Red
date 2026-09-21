@@ -73,7 +73,70 @@ static T* makeObject(Runtime& rt, Obj** listHead, ObjType type,
   (maybeCollect(),                                                \
    makeObject<Type>(*this, &objects_, ObjType::tag, &bytesAllocated))
 
+namespace {
+
+// Strings this short are shared; longer ones are not. Two characters
+// covers what a program makes over and over: the characters of the text
+// it is walking, and the one and two character tokens a scanner builds.
+// Beyond that a new string is usually genuinely new, and interning it
+// costs a table insert, a weak-table entry and a slot in the sweep, to
+// save a comparison that valuesEqual() already does on contents.
+constexpr size_t kInternMaxLength = 2;
+
+}  // namespace
+
+ObjString* Runtime::allocateString(char* chars, size_t length, uint32_t hash,
+                                   bool share) {
+  ObjString* string = NEW_OBJECT(ObjString, String);
+  string->length = length;
+  string->chars = chars;
+  string->hash = hash;
+  bytesAllocated += length + 1;
+
+  if (share) {
+    // The interner must not be the only thing keeping the string alive
+    // while the table resizes, so root it across the insert.
+    pushRoot((Obj*)string);
+    strings.set(string, nilValue());
+    popRoot();
+  }
+  return string;
+}
+
 ObjString* Runtime::copyString(const char* chars, size_t length) {
+  uint32_t hash = hashString(chars, length);
+  bool share = length <= kInternMaxLength;
+  if (share) {
+    ObjString* interned = strings.findString(chars, length, hash);
+    if (interned != nullptr) return interned;
+  }
+
+  char* heapChars = new char[length + 1];
+  std::memcpy(heapChars, chars, length);
+  heapChars[length] = '\0';
+  return allocateString(heapChars, length, hash, share);
+}
+
+ObjString* Runtime::takeString(char* chars, size_t length) {
+  uint32_t hash = hashString(chars, length);
+  bool share = length <= kInternMaxLength;
+  if (share) {
+    ObjString* interned = strings.findString(chars, length, hash);
+    if (interned != nullptr) {
+      // Someone already owns an identical string, so the buffer handed
+      // to us is dead weight.
+      delete[] chars;
+      return interned;
+    }
+  }
+  return allocateString(chars, length, hash, share);
+}
+
+ObjString* Runtime::copyString(const std::string& text) {
+  return copyString(text.data(), text.size());
+}
+
+ObjString* Runtime::internString(const char* chars, size_t length) {
   uint32_t hash = hashString(chars, length);
   ObjString* interned = strings.findString(chars, length, hash);
   if (interned != nullptr) return interned;
@@ -81,35 +144,11 @@ ObjString* Runtime::copyString(const char* chars, size_t length) {
   char* heapChars = new char[length + 1];
   std::memcpy(heapChars, chars, length);
   heapChars[length] = '\0';
-  return takeString(heapChars, length);
-}
-
-ObjString* Runtime::takeString(char* chars, size_t length) {
-  uint32_t hash = hashString(chars, length);
-  ObjString* interned = strings.findString(chars, length, hash);
-  if (interned != nullptr) {
-    // Someone already owns an identical string, so the buffer handed to us
-    // is dead weight.
-    delete[] chars;
-    return interned;
-  }
-
-  ObjString* string = NEW_OBJECT(ObjString, String);
-  string->length = length;
-  string->chars = chars;
-  string->hash = hash;
-  bytesAllocated += length + 1;
-
-  // The interner must not be the only thing keeping the string alive while
-  // the table resizes, so root it across the insert.
-  pushRoot((Obj*)string);
-  strings.set(string, nilValue());
-  popRoot();
-  return string;
+  return allocateString(heapChars, length, hash, true);
 }
 
 ObjString* Runtime::internString(const std::string& text) {
-  return copyString(text.data(), text.size());
+  return internString(text.data(), text.size());
 }
 
 ObjFunction* Runtime::newFunction(ObjModule* module) {

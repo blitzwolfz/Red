@@ -64,21 +64,43 @@ The alternative was NaN boxing. A `double` has about 2^51 spare bit
 patterns that all mean "not a number". Pointers and small values fit in
 those patterns, so every value can be eight bytes instead of sixteen.
 
-Red uses the tagged struct. The reasons:
+Red uses the tagged struct, and for a while this file said NaN boxing was
+a reasonable next change. It was tried in 0.4.0 and taken back out, so
+here is what happened instead of the guess.
 
-- It is correct by construction. NaN boxing needs care around signalling
-  NaN values, pointer width, and platforms where a pointer does not fit
-  in 48 bits.
-- Half the value size is not the bottleneck here. The benchmarks show the
-  interpreter is limited by dispatch and by allocation, not by the size of
-  a stack slot.
-- It is readable. A reviewer can see what a value is without decoding bit
-  patterns.
+The change itself was easy, which was the point of routing everything
+through `isNumber`, `asNumber` and `numberValue`: value.h was rewritten,
+four switch statements became if-chains, and nothing else moved. Then,
+measured against the same build on the same machine, alternating runs so
+that drift fell on both:
 
-NaN boxing is a reasonable next change. `Value` is used through small
-inline helpers (`isNumber`, `asNumber`, `numberValue` and so on), so the
-representation can change without touching the rest of the code. That was
-the point of writing it that way.
+| benchmark | tagged struct | NaN boxed |
+|---|--:|--:|
+| fib, recursive calls | 230ms | 256ms |
+| loop, tight arithmetic | 1087ms | 1139ms |
+| alloc, collector bound | 437ms | 451ms |
+| method, dispatch | 452ms | 428ms |
+| string | 652ms | 625ms |
+
+Calls and arithmetic got 5 to 12% worse. Method dispatch got 5% better.
+
+The reason is the one that does not show up in the design sketch. With a
+tagged struct the double sits at a fixed offset and loads straight into a
+floating point register. NaN boxed, it arrives in an integer register and
+every arithmetic instruction has to move it across — `fmov` on ARM64,
+`movq` on x86-64 — and then move the answer back. Two register moves per
+operation, on the hottest path there is.
+
+What NaN boxing buys is half the memory traffic, and that showed up
+exactly where it should: method dispatch, which pushes and pops more than
+it computes. But the value stack is 64K slots that stay in L1 either way,
+so there was not much traffic to save, and the register moves cost more
+than the cache did.
+
+So: sixteen bytes, and the saving is real but smaller than the price. It
+would be worth revisiting on a machine with a worse cache, or after the
+interpreter stops being dominated by dispatch, or alongside a change that
+keeps unboxed doubles in the stack. Not before.
 
 ## Objects and the heap
 
@@ -105,11 +127,32 @@ over an arena would have added a second lifetime system next to the
 collector, for no gain at this size. `Runtime::bytesAllocated` tracks the
 totals, so the collector still sees the heap it is managing.
 
-Strings are interned. Two equal strings are always the same pointer, so
-string equality and table lookup are pointer compares. The cost is a hash
-of every new string and a lookup in the intern table. The `string`
-benchmark shows that cost clearly: Red is about five times slower than
-CPython there, and much closer everywhere else.
+Strings of one or two characters are interned; longer ones are not.
+
+Interning everything was the first design, and it made string equality
+and table lookup a pointer compare. It also charged every string a
+program built for a hash table insert and a weak-table entry, whether or
+not it was ever compared to anything. Programs that build strings do that
+a great deal, and the `string` benchmark ran five and a half times slower
+than CPython because of it.
+
+The length cut-off is a bet about repetition, and it is a safe one. A
+program that makes a one character string has almost certainly made it
+before: walking text a character at a time, or a scanner building single
+character tokens. There are not many distinct short strings to hold. A
+longer string is usually genuinely new.
+
+So longer strings compare by contents: pointer first, then the stored
+hash, then `memcmp`. The hash is computed either way, so the comparison
+is one extra integer test in the case that is about to fail. That took
+the `string` benchmark from 5.6x CPython to 3.5x, and left everything
+else where it was.
+
+Table keys are the exception. Field names, method names and globals all
+come from a chunk's constant pool, which the compiler and the `.redc`
+reader both intern whatever the length, so `Table` still compares by
+pointer alone. That invariant is written down in `table.cpp`, because it
+is the kind that breaks silently.
 
 ## Garbage collector
 
@@ -386,9 +429,8 @@ These are real and they are not hidden:
 - Type annotations are parsed and ignored.
 - Optimisation is limited to peephole constant folding, because there is
   no intermediate form to run a real pass over.
-- Code that makes many *distinct* strings is slow, because every string
-  is interned. Reusing a small vocabulary is fast, which is why the
-  `string` benchmark looks much worse than real programs do.
+- Code that builds many distinct strings is still the slowest thing here,
+  though less so since only short ones are interned.
 - A task that is never joined is kept alive until the program ends.
 - Each task's value stack is one megabyte, allocated up front. That is
   the price of never moving it, because call frames and open upvalues

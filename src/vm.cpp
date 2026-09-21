@@ -1130,7 +1130,7 @@ InterpretResult VM::run(int baseFrame) {
       case OP_TO_STRING: {
         // Through stringify, so "${p}" goes via the class's own str()
         // the same way print(p) does.
-        ObjString* text = runtime_.internString(stringify(peek(0)));
+        ObjString* text = runtime_.copyString(stringify(peek(0)));
         pop();
         push(objValue((Obj*)text));
         break;

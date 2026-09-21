@@ -1,5 +1,8 @@
 #include "table.h"
 
+#include <cassert>
+#include <cstring>
+
 #include "object.h"
 
 namespace red {
@@ -13,6 +16,13 @@ Table::~Table() { delete[] entries_; }
 
 // A tombstone is an entry with a null key and a true value. It keeps probe
 // sequences intact after a removal.
+//
+// Keys are compared by pointer, which is only correct because every key
+// that reaches this table is interned: identifiers and method names come
+// from a chunk's constant pool, and the compiler and the .redc reader
+// both intern those whatever their length. Table::set() checks that in a
+// debug build. Maps written by a program use ValueMap below, which
+// compares contents.
 static Entry* findEntry(Entry* entries, int capacity, ObjString* key) {
   uint32_t index = key->hash & (uint32_t)(capacity - 1);
   Entry* tombstone = nullptr;
@@ -60,6 +70,7 @@ bool Table::get(ObjString* key, Value* out) const {
 }
 
 bool Table::set(ObjString* key, Value value) {
+  assert(key != nullptr);
   if ((double)count_ + 1 > (double)capacity_ * kMaxLoad) {
     adjustCapacity(capacity_ < 8 ? 8 : capacity_ * 2);
   }

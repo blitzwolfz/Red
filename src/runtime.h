@@ -34,10 +34,21 @@ class Runtime {
   std::condition_variable cond;
 
   // ---- allocation -------------------------------------------------
+  // Makes a string. Short ones are shared through the interner, because
+  // a program that makes one has almost certainly made it before: single
+  // characters from walking text, one and two character tokens. Longer
+  // ones are allocated outright, because interning them costs a table
+  // insert and a weak-table entry to save a comparison that content
+  // equality already handles.
   ObjString* copyString(const char* chars, size_t length);
+  ObjString* copyString(const std::string& text);
+  // Always shared. For names the runtime and the compiler look up over
+  // and over: identifiers, method names, module paths.
   ObjString* internString(const std::string& text);
+  ObjString* internString(const char* chars, size_t length);
   // Takes ownership of a buffer that was allocated with new char[].
   ObjString* takeString(char* chars, size_t length);
+
 
   ObjFunction* newFunction(ObjModule* module);
   ObjNative* newNative(NativeFn fn, const std::string& name, int arity);
@@ -121,6 +132,11 @@ class Runtime {
   size_t peakBytes = 0;
 
  private:
+  // Builds the object around a buffer this runtime now owns, and puts it
+  // in the interner when `share` says to.
+  ObjString* allocateString(char* chars, size_t length, uint32_t hash,
+                            bool share);
+
   Obj* objects_ = nullptr;
   std::vector<Obj*> grayStack_;
   std::vector<Obj*> tempRoots_;

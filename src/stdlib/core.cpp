@@ -91,11 +91,11 @@ Value nativeTypeName(VM& vm, int, Value* args) {
 }
 
 Value nativeStr(VM& vm, int, Value* args) {
-  return objValue((Obj*)vm.runtime().internString(vm.stringify(args[0])));
+  return objValue((Obj*)vm.runtime().copyString(vm.stringify(args[0])));
 }
 
 Value nativeRepr(VM& vm, int, Value* args) {
-  return objValue((Obj*)vm.runtime().internString(vm.display(args[0])));
+  return objValue((Obj*)vm.runtime().copyString(vm.display(args[0])));
 }
 
 Value nativeNum(VM& vm, int, Value* args) {
