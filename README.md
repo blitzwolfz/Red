@@ -147,6 +147,7 @@ print(task.join());
 |---|---|
 | `red program [args]` | Runs a program, source or compiled. |
 | `red compile in.red [-o out]` | Compiles ahead of time to a `.redc` file. |
+| `red build in.red [-o name]` | Writes a standalone executable. |
 | `red test [directory]` | Runs the tests in a directory. |
 | `red debug script.red` | Runs a program under the debugger. |
 | `red fmt [-w] [files]` | Formats source. `--check` reports what would change. |
@@ -217,6 +218,19 @@ red examples/tour.redc
 On a four thousand function program that is 41ms of start-up down to
 4.4ms. The compiled file is versioned and checked on load, and is smaller
 than the source for ordinary code.
+
+Ship a program to someone who does not have Red by building it into one
+file:
+
+```bash
+red build examples/logstat/logstat.red -o logstat
+./logstat access.log
+```
+
+That copies the interpreter, puts the compiled program and every module
+it imports on the end of it, and marks it executable. Nothing else has to
+be on the machine. It is about half a megabyte whatever the program
+does, since nearly all of that is the interpreter.
 
 Run the test suite. A test is a Red program with its expected output
 written in it as comments, and `red test` runs a directory of them:

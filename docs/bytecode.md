@@ -300,6 +300,55 @@ Imports stay dynamic: `IMPORT` still carries a path and still resolves
 when the instruction runs. So a compiled file finds its imports relative
 to where the compiled file is, not where its source was.
 
+## Standalone executables
+
+`red build app.red -o app` writes a copy of the interpreter with the
+program on the end of it:
+
+```
+<the interpreter, byte for byte>
+<archive>
+payload length    8 bytes, little endian
+"REDBUNDL"        8 bytes
+```
+
+The loader never looks that far. A Mach-O's code signature covers the
+bytes up to its own end and an ELF is described by headers that point
+backwards from the top, so neither format minds what follows, and the
+file is still a valid executable. On start-up the interpreter reads its
+own path from the operating system rather than from `argv[0]`, since a
+built program is usually started through the `PATH`, and checks the last
+sixteen bytes for the magic. Finding it means this process is that
+program, and no command line of the interpreter's own applies.
+
+The archive holds every module, not only the one named:
+
+```
+"REDX"            4 bytes
+version           1 byte
+count             varint
+  path            the build machine's absolute path
+  name            the module name
+  link count      varint
+    request       an import as it was written
+    target        the path it resolved to
+  code            a .redc, exactly as `red compile` would write it
+entry             varint, an index into the table
+```
+
+The build follows `IMPORT` instructions through the compiled tree,
+resolving each the way the VM would, and compiles what it finds, until
+nothing new turns up. The paths are the build machine's and mean nothing
+on another, which is why each module carries its own links: an import
+inside a built program is answered by looking up the spelling that was
+written, so the file system is never consulted and the sources can be
+deleted.
+
+Two things stay outside. A native extension is a shared library the
+operating system loads from a real path, so a program using one still
+needs that file. And the bundle carries bytecode, not machine code, so
+an executable built on one platform runs only there.
+
 ## Constant folding
 
 The compiler folds arithmetic, bitwise operations and string joins on

@@ -104,6 +104,10 @@ class Runtime {
   Table builtins;
   std::vector<std::string> scriptArgs;
   ObjModule* mainModule = nullptr;
+  // Set when this process is a program built with `red build`. Imports
+  // are then answered out of the executable rather than the file system,
+  // so a built program carries its libraries with it.
+  const struct Bundle* bundle = nullptr;
 
   // Interned names the VM needs on hot paths.
   ObjString* initString = nullptr;

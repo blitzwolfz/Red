@@ -13,6 +13,7 @@ option(RED_SANITIZE "Build with the address and undefined behaviour sanitizers" 
 
 add_executable(red
   src/main.cpp
+  src/bundle.cpp
   src/chunk.cpp
   src/compiler.cpp
   src/debug.cpp

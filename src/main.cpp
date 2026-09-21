@@ -13,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include "bundle.h"
+#include "chunk.h"
 #include "compiler.h"
 #include "debug.h"
 #include "debugger.h"
@@ -44,6 +46,7 @@ void printUsage() {
       "  red <program> [args...]      run a program, source or compiled\n"
       "  red run <program> [args]     same, stated explicitly\n"
       "  red compile <in.red> [-o f]  compile ahead of time to a .redc file\n"
+      "  red build <in.red> [-o name] write a standalone executable\n"
       "  red repl                     start the interactive prompt\n"
       "  red test [directory]         run the tests in a directory\n"
       "  red debug <script.red>       run a program under the debugger\n"
@@ -276,6 +279,214 @@ int disassembleScript(Runtime& runtime, const std::string& path) {
   }
   disassembleChunk(function->chunk, "<script> " + path);
   return 0;
+}
+
+// Runs the program carried inside this executable. A bundled program
+// gets every argument it was started with, because there is no command
+// to pick out: the executable is the program.
+int runBundled(Runtime& runtime, const std::string& executable,
+               const std::string& payload) {
+  std::string name = executable.substr(executable.find_last_of('/') + 1);
+
+  Bundle bundle;
+  std::string reason;
+  if (!decodeBundle(payload, &bundle, &reason)) {
+    std::fprintf(stderr, "%s: damaged program: %s\n", name.c_str(),
+                 reason.c_str());
+    return kExitCompileError;
+  }
+  // Imports inside the program are answered from here rather than from
+  // the file system, under the paths the build recorded.
+  runtime.bundle = &bundle;
+
+  {
+    std::lock_guard<std::mutex> guard(runtime.lock);
+    installBuiltins(runtime);
+  }
+
+  VM vm(runtime);
+  vm.attach();
+  // The module keeps the path it had when it was built, because that is
+  // the key its own imports are recorded under.
+  ObjModule* module =
+      makeModule(runtime, bundle.modules[bundle.entry].path, name);
+
+  ObjFunction* function =
+      readCompiled(runtime, bundle.modules[bundle.entry].code, module, &reason);
+  if (function == nullptr) {
+    std::fprintf(stderr, "%s: damaged program: %s\n", name.c_str(),
+                 reason.c_str());
+    vm.detach();
+    runtime.joinAllTasks();
+    return kExitCompileError;
+  }
+
+  InterpretResult status = vm.runFunction(function);
+  if (status == InterpretResult::RuntimeError) reportRuntimeError(vm);
+  vm.detach();
+  runtime.joinAllTasks();
+  if (status == InterpretResult::RuntimeError) return kExitRuntimeError;
+  return 0;
+}
+
+// Every module path this function's code imports, in the order the
+// imports appear. Nested functions live in the constant pool, so the
+// walk has to go through them as well as along the code.
+void collectImports(ObjFunction* function, std::vector<std::string>* out) {
+  const Chunk& chunk = function->chunk;
+  for (size_t offset = 0; offset < chunk.code.size();) {
+    if (chunk.code[offset] == OP_IMPORT) {
+      uint16_t index = (uint16_t)((chunk.code[offset + 1] << 8) |
+                                  chunk.code[offset + 2]);
+      Value constant = chunk.constants[index];
+      if (isString(constant)) {
+        std::string request(asString(constant)->chars,
+                            asString(constant)->length);
+        if (std::find(out->begin(), out->end(), request) == out->end()) {
+          out->push_back(request);
+        }
+      }
+    }
+    offset += instructionLength(chunk, offset);
+  }
+
+  for (Value constant : chunk.constants) {
+    if (isObj(constant) && asObj(constant)->type == ObjType::Function) {
+      collectImports(asFunction(constant), out);
+    }
+  }
+}
+
+// Resolves an import the same way the VM does, so that what the build
+// puts in the bundle is what running from source would have loaded.
+std::string resolveImport(const std::string& from, const std::string& request) {
+  std::string resolved = absolutePath(joinPath(directoryOf(from), request));
+  if (!fileExists(resolved) && !request.empty() && request.front() != '/') {
+    std::string found = findOnLibraryPath(request);
+    if (!found.empty()) resolved = found;
+  }
+  return resolved;
+}
+
+std::string moduleNameFor(const std::string& path) {
+  std::string name = path.substr(path.find_last_of('/') + 1);
+  size_t dot = name.find_last_of('.');
+  if (dot != std::string::npos) name = name.substr(0, dot);
+  return name;
+}
+
+// Compiles one module and records where its imports lead. Returns false
+// after reporting why.
+bool bundleModule(Runtime& runtime, const std::string& path,
+                  BundledModule* out, std::vector<std::string>* queue) {
+  std::string source;
+  if (!readFile(path, &source)) {
+    std::fprintf(stderr, "Cannot open '%s'.\n", path.c_str());
+    return false;
+  }
+
+  out->path = path;
+  out->name = moduleNameFor(path);
+
+  ObjString* nameString = runtime.internString(out->name);
+  GCRoot nameRoot(runtime, (Obj*)nameString);
+  ObjString* pathString = runtime.internString(path);
+  GCRoot pathRoot(runtime, (Obj*)pathString);
+  ObjModule* module = runtime.newModule(nameString, pathString);
+  GCRoot moduleRoot(runtime, (Obj*)module);
+
+  ObjFunction* function;
+  std::string reason;
+  if (looksCompiled(source)) {
+    // Already a .redc. It goes in as it stands, but it still has to be
+    // read so that its imports can be followed.
+    out->code = source;
+    function = readCompiled(runtime, source, module, &reason);
+    if (function == nullptr) {
+      std::fprintf(stderr, "Cannot load '%s': %s\n", path.c_str(),
+                   reason.c_str());
+      return false;
+    }
+  } else {
+    function = compile(runtime, source, module);
+    if (function == nullptr) return false;
+    if (!writeCompiled(function, &out->code, &reason)) {
+      std::fprintf(stderr, "Cannot compile '%s': %s\n", path.c_str(),
+                   reason.c_str());
+      return false;
+    }
+  }
+  GCRoot functionRoot(runtime, (Obj*)function);
+
+  std::vector<std::string> requests;
+  collectImports(function, &requests);
+  for (const std::string& request : requests) {
+    std::string target = resolveImport(path, request);
+    if (!fileExists(target)) {
+      std::fprintf(stderr, "Cannot find module '%s', imported by '%s'.\n",
+                   request.c_str(), path.c_str());
+      return false;
+    }
+    out->links.emplace_back(request, target);
+    queue->push_back(target);
+  }
+  return true;
+}
+
+// `red build app.red -o app` writes a copy of this interpreter with the
+// program, and every module it imports, on the end of it.
+int buildExecutable(Runtime& runtime, const std::string& path,
+                    const std::string& outPath) {
+  std::string resolved = absolutePath(path);
+  if (!fileExists(resolved)) {
+    std::fprintf(stderr, "Cannot open '%s'.\n", path.c_str());
+    return kExitUsage;
+  }
+
+  std::lock_guard<std::mutex> guard(runtime.lock);
+
+  Bundle bundle;
+  std::vector<std::string> queue{resolved};
+  std::vector<std::string> seen;
+  while (!queue.empty()) {
+    std::string next = queue.front();
+    queue.erase(queue.begin());
+    if (std::find(seen.begin(), seen.end(), next) != seen.end()) continue;
+    seen.push_back(next);
+
+    BundledModule module;
+    if (!bundleModule(runtime, next, &module, &queue)) return kExitCompileError;
+    bundle.modules.push_back(std::move(module));
+  }
+  // The first module compiled is the one that was asked for, and an
+  // import cycle cannot move it, because a path already seen is skipped.
+  bundle.entry = 0;
+
+  std::string reason;
+  std::string payload = encodeBundle(bundle);
+  if (!writeBundle(executablePath(), payload, outPath, &reason)) {
+    std::fprintf(stderr, "Cannot build '%s': %s\n", outPath.c_str(),
+                 reason.c_str());
+    return kExitUsage;
+  }
+
+  struct stat info;
+  size_t total = ::stat(outPath.c_str(), &info) == 0 ? (size_t)info.st_size : 0;
+  std::printf("%s -> %s (%zu bytes, %zu of them program, %zu module%s)\n",
+              path.c_str(), outPath.c_str(), total, payload.size(),
+              bundle.modules.size(),
+              bundle.modules.size() == 1 ? "" : "s");
+  return 0;
+}
+
+// Drops a .red or .redc suffix, and any directory part. `red build
+// src/app.red` writes `app` in the working directory.
+std::string executableNameFor(const std::string& path) {
+  std::string name = path.substr(path.find_last_of('/') + 1);
+  size_t dot = name.find_last_of('.');
+  if (dot != std::string::npos && dot != 0) name = name.substr(0, dot);
+  if (name.empty()) name = "a.out";
+  return name;
 }
 
 // Replaces a .red suffix with .redc, or adds it.
@@ -796,7 +1007,17 @@ int runBench(Runtime& runtime, const std::string& directory) {
 
 int main(int argc, const char* argv[]) {
   Runtime runtime;
-  setExecutablePath(argc > 0 ? argv[0] : "red");
+  std::string self =
+      selfExecutablePath(argc > 0 ? argv[0] : "red");
+  setExecutablePath(self);
+
+  // A bundled program comes first: the executable is that program, and
+  // none of the interpreter's own commands apply to it.
+  std::string bundled;
+  if (readBundle(self, &bundled)) {
+    for (int i = 1; i < argc; i++) runtime.scriptArgs.push_back(argv[i]);
+    return runBundled(runtime, self, bundled);
+  }
 
   // `red test` takes flags of its own, so everything after it is handed
   // over untouched rather than read as options for the interpreter. Only
@@ -923,6 +1144,17 @@ int main(int argc, const char* argv[]) {
       return kExitUsage;
     }
     return runLegacy(positional[1]);
+  }
+  if (command == "build") {
+    if (positional.size() < 2) {
+      std::fprintf(stderr, "Usage: red build <script.red> [-o name]\n");
+      return kExitUsage;
+    }
+    std::string outPath = executableNameFor(positional[1]);
+    for (size_t i = 2; i + 1 < positional.size(); i++) {
+      if (positional[i] == "-o") outPath = positional[i + 1];
+    }
+    return buildExecutable(runtime, positional[1], outPath);
   }
   if (command == "compile") {
     if (positional.size() < 2) {

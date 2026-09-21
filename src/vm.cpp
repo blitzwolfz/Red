@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 
+#include "bundle.h"
 #include "compiler.h"
 #include "debug.h"
 #include "debugger.h"
@@ -692,20 +693,37 @@ bool VM::spawnTask(int argCount) {
 }
 
 bool VM::importModule(ObjString* path) {
-  // Relative imports resolve against the importing file, not the working
-  // directory, so a module can be moved without editing its imports.
   std::string base = directoryOf(std::string(currentModule()->path->chars,
                                              currentModule()->path->length));
   std::string request(path->chars, path->length);
-  std::string resolved = absolutePath(joinPath(base, request));
+  std::string resolved;
 
-  // A path that is not next to the importing file is looked for on the
-  // library search path, so a shared library of Red code does not have to
-  // be reached with a chain of "..". docs/libraries.md describes the
-  // order.
-  if (!fileExists(resolved) && !request.empty() && request.front() != '/') {
-    std::string found = findOnLibraryPath(request);
-    if (!found.empty()) resolved = found;
+  // A program built with `red build` carries its modules inside itself,
+  // under the paths the build machine resolved. Those paths mean nothing
+  // here, so the link the build recorded is what answers the import; the
+  // file system is never consulted.
+  const BundledModule* bundled = nullptr;
+  if (runtime_.bundle != nullptr) {
+    std::string from(currentModule()->path->chars,
+                     currentModule()->path->length);
+    resolved = runtime_.bundle->resolve(from, request);
+    if (!resolved.empty()) bundled = runtime_.bundle->find(resolved);
+  }
+
+  if (bundled == nullptr) {
+    // Relative imports resolve against the importing file, not the
+    // working directory, so a module can be moved without editing its
+    // imports.
+    resolved = absolutePath(joinPath(base, request));
+
+    // A path that is not next to the importing file is looked for on the
+    // library search path, so a shared library of Red code does not have
+    // to be reached with a chain of "..". docs/libraries.md describes the
+    // order.
+    if (!fileExists(resolved) && !request.empty() && request.front() != '/') {
+      std::string found = findOnLibraryPath(request);
+      if (!found.empty()) resolved = found;
+    }
   }
   ObjString* key = runtime_.internString(resolved);
   // Rooted for the whole function: the interner is weak, and everything
@@ -721,14 +739,19 @@ bool VM::importModule(ObjString* path) {
   }
 
   std::string source;
-  if (!readFile(resolved, &source)) {
-    return runtimeErrorAs("import", "Cannot open module '%s'.",
-                          resolved.c_str());
+  std::string name;
+  if (bundled != nullptr) {
+    source = bundled->code;
+    name = bundled->name;
+  } else {
+    if (!readFile(resolved, &source)) {
+      return runtimeErrorAs("import", "Cannot open module '%s'.",
+                            resolved.c_str());
+    }
+    name = resolved.substr(resolved.find_last_of('/') + 1);
+    size_t dot = name.find_last_of('.');
+    if (dot != std::string::npos) name = name.substr(0, dot);
   }
-
-  std::string name = resolved.substr(resolved.find_last_of('/') + 1);
-  size_t dot = name.find_last_of('.');
-  if (dot != std::string::npos) name = name.substr(0, dot);
 
   ObjString* nameString = runtime_.internString(name);
   GCRoot nameRoot(runtime_, (Obj*)nameString);

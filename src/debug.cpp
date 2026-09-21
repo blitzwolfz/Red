@@ -173,6 +173,58 @@ size_t disassembleInstruction(const Chunk& chunk, size_t offset) {
   }
 }
 
+size_t instructionLength(const Chunk& chunk, size_t offset) {
+  switch (chunk.code[offset]) {
+    case OP_GET_LOCAL:
+    case OP_SET_LOCAL:
+    case OP_GET_UPVALUE:
+    case OP_SET_UPVALUE:
+    case OP_CALL:
+    case OP_SPAWN:
+      return 2;
+
+    case OP_CONSTANT:
+    case OP_GET_GLOBAL:
+    case OP_SET_GLOBAL:
+    case OP_DEFINE_GLOBAL:
+    case OP_GET_PROPERTY:
+    case OP_SET_PROPERTY:
+    case OP_GET_SUPER:
+    case OP_CLASS:
+    case OP_METHOD:
+    case OP_IMPORT:
+    case OP_DESTRUCTURE_FIELD:
+    case OP_ARRAY:
+    case OP_MAP:
+    case OP_DESTRUCTURE_INDEX:
+    case OP_DESTRUCTURE_REST:
+    case OP_JUMP:
+    case OP_JUMP_IF_FALSE:
+    case OP_JUMP_IF_TRUE:
+    case OP_LOOP:
+    case OP_TRY_BEGIN:
+      return 3;
+
+    case OP_INVOKE:
+    case OP_SUPER_INVOKE:
+    case OP_JUMP_IF_ARG:
+      return 4;
+
+    case OP_ITER_NEXT:
+      return 5;
+
+    case OP_CLOSURE: {
+      // Two operand bytes, then a pair per upvalue.
+      uint16_t constant = readShort(chunk, offset + 1);
+      ObjFunction* function = asFunction(chunk.constants[constant]);
+      return 3 + (size_t)function->upvalueCount * 2;
+    }
+
+    default:
+      return 1;
+  }
+}
+
 void disassembleChunk(const Chunk& chunk, const std::string& name) {
   std::printf("== %s ==\n", name.c_str());
   for (size_t offset = 0; offset < chunk.code.size();) {

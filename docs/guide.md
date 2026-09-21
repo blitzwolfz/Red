@@ -718,6 +718,31 @@ extension written in C or C++, with the Red version kept as the fallback.
 A Red program is its source. Shipping it means putting the files
 somewhere and making sure the imports still resolve.
 
+**As a single executable**, which is the shortest answer for anything
+going to someone who does not have Red:
+
+```bash
+$ red build logstat.red -o logstat
+logstat.red -> logstat (567098 bytes, 8650 of them program, 3 modules)
+$ ./logstat access.log
+```
+
+`red build` copies the interpreter, appends the compiled program and
+every module it imports, and marks the result executable. The file that
+comes out needs nothing else on the machine: no Red, no `RED_PATH`, no
+library directory. Copy it and run it.
+
+The size is almost all interpreter, so it is close to the same half
+megabyte whether the program is five lines or five thousand. An import
+inside a built program is answered from inside the file, under the paths
+the build recorded, so the sources can be deleted afterwards and it
+still runs.
+
+Two things it does not carry. A native extension is a `.so` that the
+operating system has to load from a real path, so a program using one
+still needs that file beside it. And a built program is for the platform
+that built it: build on Linux for Linux, on macOS for macOS.
+
 **For something used in one place**, nothing needs installing:
 
 ```bash
@@ -763,6 +788,7 @@ Before you call it done:
 - `program --help` prints something you would want to read
 - a bad argument exits 64 and a missing file exits something other than 0
 - the program works when it is started from a different directory
+- `red build` produces something that runs with the sources moved away
 
 ## Where to go next
 
