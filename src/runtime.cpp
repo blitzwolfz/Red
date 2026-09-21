@@ -89,11 +89,23 @@ Thread* Runtime::newThread() {
   // there is nothing on it to scan.
   Thread* thread = new Thread();
   thread->parked.store(true, std::memory_order_release);
+  // The caller may be trying to spawn while another thread is already
+  // stopping the world. Park it before taking worldMutex_: otherwise the
+  // collector waits for this caller while the caller waits for the lock.
+  Thread* caller = t_thread;
+  if (caller != nullptr) {
+    caller->parked.store(true, std::memory_order_release);
+    worldCond_.notify_all();
+  }
   std::unique_lock<std::mutex> guard(worldMutex_);
   // The collector walks this list without holding the mutex, so it must
   // not grow underneath it.
   while (collecting_) worldCond_.wait(guard);
   threads_.push_back(thread);
+  if (caller != nullptr) {
+    caller->parked.store(false, std::memory_order_release);
+  }
+  worldCond_.notify_all();
   return thread;
 }
 
@@ -112,6 +124,13 @@ void Runtime::adoptThread(Thread* thread, VM* vm) {
 }
 
 void Runtime::detachThread(Thread* thread) {
+  // The thread has stopped running Red code before it can detach, so make
+  // its stack safe for a collector before waiting for the world lock. A
+  // collector may already be stopping the world while this thread is on
+  // its way out; waiting for that lock first would leave the collector
+  // waiting on this thread in return.
+  thread->parked.store(true, std::memory_order_release);
+  worldCond_.notify_all();
   std::unique_lock<std::mutex> guard(worldMutex_);
   // Same reason as newThread: the list this thread is about to leave is
   // one the collector may be walking.
@@ -164,7 +183,6 @@ void Runtime::reachSafepoint() {
 }
 
 void Runtime::park() {
-  std::lock_guard<std::mutex> guard(worldMutex_);
   if (t_thread != nullptr) {
     t_thread->parked.store(true, std::memory_order_release);
   }
@@ -931,14 +949,13 @@ void Runtime::sweep() {
 }
 
 void Runtime::collectGarbage() {
-  if (collecting_) return;
-
-  // Whoever gets here first runs the collection. Everyone else waits at
-  // the safepoint below and finds the work already done.
+  // Claim collection before stopping the world. Otherwise two threads can
+  // both pass the old check while the first collector is still parking the
+  // others, and then mutate grayStack_ at the same time.
   std::unique_lock<std::mutex> guard(worldMutex_);
   if (collecting_) return;
-  stopWorld(guard);
   collecting_ = true;
+  stopWorld(guard);
   // The world is stopped by gcPending rather than by this mutex, so it
   // can be let go: a thread that wants to park while the collector
   // works has to be able to, or a channel operation could hold a lock
@@ -975,7 +992,6 @@ void Runtime::collectGarbage() {
 }
 
 void Runtime::maybeCollect() {
-  if (collecting_) return;
   Thread* self = t_thread;
 
   // What this thread has allocated since the last time is folded into
