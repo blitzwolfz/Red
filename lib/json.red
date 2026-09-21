@@ -105,7 +105,7 @@ class Reader {
   }
 
   string() {
-    this.at += 1;                       // the opening quote
+    this.at += 1; // the opening quote
     const parts = [];
     for (;;) {
       if (this.atEnd()) { this.fail("unterminated string"); }
@@ -175,7 +175,7 @@ class Reader {
   }
 
   array() {
-    this.at += 1;                       // the opening bracket
+    this.at += 1; // the opening bracket
     const items = [];
     this.skipSpace();
     if (this.peek() == "]") {
@@ -199,7 +199,7 @@ class Reader {
   }
 
   object() {
-    this.at += 1;                       // the opening brace
+    this.at += 1; // the opening brace
     const entries = {};
     this.skipSpace();
     if (this.peek() == "}") {
@@ -283,7 +283,7 @@ fun writeNumber(value) {
 fun writeValue(value, indent, depth, parts) {
   if (depth > MAX_DEPTH) {
     throw error("JSON structure is deeper than ${MAX_DEPTH}, or holds itself",
-                nil, "json");
+      nil, "json");
   }
 
   const kind = type(value);
@@ -332,7 +332,7 @@ fun writeValue(value, indent, depth, parts) {
         parts.push(quote(str(key)));
       } else {
         throw error("a JSON key must be a string or a number, not ${keyKind}",
-                    key, "json");
+          key, "json");
       }
       parts.push(":");
       if (indent > 0) { parts.push(" "); }

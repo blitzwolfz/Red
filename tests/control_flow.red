@@ -1,9 +1,9 @@
 // if, while, for, break and continue.
 
-if (true) { print("then"); } else { print("else"); }   // expect: then
-if (false) { print("then"); } else { print("else"); }  // expect: else
+if (true) { print("then"); } else { print("else"); }  // expect: then
+if (false) { print("then"); } else { print("else"); } // expect: else
 if (nil) { print("no"); }
-if (1 < 2) print("no braces");                         // expect: no braces
+if (1 < 2) print("no braces"); // expect: no braces
 
 let i = 0;
 while (i < 3) {
@@ -40,7 +40,7 @@ while (n < 6) {
   if (n % 2 == 1) { continue; }
   evens.push(n);
 }
-print(evens);                                          // expect: [2, 4, 6]
+print(evens); // expect: [2, 4, 6]
 
 // A for loop with no clauses runs until something breaks it.
 let count = 0;
@@ -48,4 +48,4 @@ for (;;) {
   count = count + 1;
   if (count == 3) { break; }
 }
-print(count);                                          // expect: 3
+print(count); // expect: 3

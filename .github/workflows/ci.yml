@@ -92,6 +92,11 @@ jobs:
           printf 'import "json.red" as j;\nprint(j.stringify(j.parse("[1,2]")));\n' > /tmp/j.red
           ./build/red /tmp/j.red
 
+      # Every .red file in the repository is already formatted, so this
+      # says nothing unless someone changes one and does not run fmt.
+      - name: Formatting
+        run: ./build/red fmt --check $(find tests examples lib selfhost bench -name '*.red' | sort)
+
       - name: Disassembler
         run: ./build/red disasm examples/tiny.red
 

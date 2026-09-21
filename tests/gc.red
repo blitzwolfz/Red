@@ -17,8 +17,8 @@ for (let round = 0; round < 20; round = round + 1) {
 }
 
 const kept = buildList(100);
-print(kept.len());                   // expect: 100
-print(kept[0], kept[99]);            // expect: item 0 item 99
+print(kept.len());        // expect: 100
+print(kept[0], kept[99]); // expect: item 0 item 99
 
 // Closures keep their captured variables alive across collections.
 fun makeCounters(n) {
@@ -32,8 +32,8 @@ fun makeCounters(n) {
 const counters = makeCounters(10);
 buildList(200);
 collect();
-print(counters[5]());                // expect: 6
-print(counters[9]());                // expect: 10
+print(counters[5]()); // expect: 6
+print(counters[9]()); // expect: 10
 
 // Instances, their fields and their classes all survive.
 class Node {
@@ -55,8 +55,8 @@ while (walk != nil) {
   length = length + 1;
   walk = walk.next;
 }
-print(length);                       // expect: 100
-print(head.value);                   // expect: 99
+print(length);     // expect: 100
+print(head.value); // expect: 99
 
 // Map contents are reachable through the map.
 const registry = {};
@@ -64,5 +64,5 @@ for (let i = 0; i < 50; i = i + 1) {
   registry["key ${i}"] = [i, "value ${i}"];
 }
 collect();
-print(registry.len());               // expect: 50
-print(registry["key 25"][1]);        // expect: value 25
+print(registry.len());        // expect: 50
+print(registry["key 25"][1]); // expect: value 25

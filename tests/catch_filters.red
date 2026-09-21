@@ -2,13 +2,13 @@
 // matches runs, and an error nothing matches carries on outwards.
 
 // Every error carries a kind. The runtime uses a fixed set of names.
-try { let x = 1 / 0; } catch (e) { print(e.kind); }        // expect: zero-division
-try { undefinedThing(); } catch (e) { print(e.kind); }     // expect: name
-try { nil + 1; } catch (e) { print(e.kind); }              // expect: type
-try { [1][9]; } catch (e) { print(e.kind); }               // expect: index
-try { assert(false); } catch (e) { print(e.kind); }        // expect: assert
-try { open("no_such_file", "r"); } catch (e) { print(e.kind); }  // expect: io
-try { throw "plain"; } catch (e) { print(e.kind); }        // expect: user
+try { let x = 1 / 0; } catch (e) { print(e.kind); }             // expect: zero-division
+try { undefinedThing(); } catch (e) { print(e.kind); }          // expect: name
+try { nil +1; } catch (e) { print(e.kind); }                    // expect: type
+try { [1][9]; } catch (e) { print(e.kind); }                    // expect: index
+try { assert(false); } catch (e) { print(e.kind); }             // expect: assert
+try { open("no_such_file", "r"); } catch (e) { print(e.kind); } // expect: io
+try { throw "plain"; } catch (e) { print(e.kind); }             // expect: user
 
 // A string filter selects on the kind.
 fun classify(mode) {
@@ -16,7 +16,7 @@ fun classify(mode) {
     switch (mode) {
       case 0: let x = 1 / 0;
       case 1: undefinedThing();
-      case 2: nil + 1;
+      case 2: nil +1;
       default: throw "something else";
     }
   } catch (e: "zero-division") {
@@ -43,7 +43,7 @@ class NetworkError < AppError { }
 try {
   throw DiskError("disk gone");
 } catch (e: DiskError) {
-  print("${e.kind}: ${e.message}");      // expect: DiskError: disk gone
+  print("${e.kind}: ${e.message}"); // expect: DiskError: disk gone
 }
 
 // A filter matches subclasses, so a parent catches its children.
@@ -58,16 +58,16 @@ fun route(error) {
     return "unknown";
   }
 }
-print(route(NetworkError("a")));         // expect: network
-print(route(DiskError("b")));            // expect: app
-print(route(AppError("c")));             // expect: app
-print(route("not a class"));             // expect: unknown
+print(route(NetworkError("a"))); // expect: network
+print(route(DiskError("b")));    // expect: app
+print(route(AppError("c")));     // expect: app
+print(route("not a class"));     // expect: unknown
 
 // The thrown instance stays reachable as the payload.
 try {
   throw DiskError("details here");
 } catch (e: AppError) {
-  print(e.payload.message);              // expect: details here
+  print(e.payload.message); // expect: details here
 }
 
 // An error that nothing matches carries on to the enclosing try, with
@@ -82,7 +82,7 @@ fun inner() {
 try {
   inner();
 } catch (e: "special") {
-  print("outer got ${e.message}");       // expect: outer got from inner
+  print("outer got ${e.message}"); // expect: outer got from inner
 }
 
 // An unmatched error leaves a function the same way an uncaught one
@@ -98,21 +98,21 @@ fun neverMatches() {
 try {
   neverMatches();
 } catch (e) {
-  print(e.message);                      // expect: escaping
+  print(e.message); // expect: escaping
 }
 
 // error() takes an explicit kind as its third argument.
 try {
   throw error("custom failure", {"code": 7}, "my-kind");
 } catch (e: "my-kind") {
-  print(e.kind, e.message, e.payload["code"]);   // expect: my-kind custom failure 7
+  print(e.kind, e.message, e.payload["code"]); // expect: my-kind custom failure 7
 }
 
 // Clauses are tried in order, so a broad one placed first wins.
 try {
   throw DiskError("x");
 } catch (e: AppError) {
-  print("broad first");                  // expect: broad first
+  print("broad first"); // expect: broad first
 } catch (e: DiskError) {
   print("never reached");
 }
@@ -134,7 +134,7 @@ for (let i in range(0, 300)) {
     counts["other"] += 1;
   }
 }
-print(counts["a"], counts["b"], counts["other"]);   // expect: 100 100 100
+print(counts["a"], counts["b"], counts["other"]); // expect: 100 100 100
 
 // A filter that is neither a string nor a class is reported.
 try {
@@ -144,6 +144,6 @@ try {
     print("never");
   }
 } catch (e: "type") {
-  print(e.message);                      // expect: A catch filter must be a string or a class, got number.
+  print(e.message); // expect: A catch filter must be a string or a class, got number.
 }
-print("done");                           // expect: done
+print("done"); // expect: done

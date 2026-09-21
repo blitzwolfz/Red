@@ -1,17 +1,17 @@
 // String literals, escapes, interpolation and methods.
 
-print("hello" + " " + "world");   // expect: hello world
-print("tab:\tdone");              // expect: tab:	done
-print("quote:\"q\"");             // expect: quote:"q"
+print("hello" + " " + "world"); // expect: hello world
+print("tab:\tdone");            // expect: tab:	done
+print("quote:\"q\"");           // expect: quote:"q"
 
 const name = "Red";
 const version = 2;
-print("${name} v${version}");     // expect: Red v2
-print("sum ${1 + 2} end");        // expect: sum 3 end
-print("nested ${"in" + "ner"}");  // expect: nested inner
+print("${name} v${version}");    // expect: Red v2
+print("sum ${1 + 2} end");       // expect: sum 3 end
+print("nested ${"in" + "ner"}"); // expect: nested inner
 // A literal dollar sign needs no escape unless a brace follows it.
-print("cost: $5");                // expect: cost: $5
-print("brace: \${x}");            // expect: brace: ${x}
+print("cost: $5");     // expect: cost: $5
+print("brace: \${x}"); // expect: brace: ${x}
 
 const text = "  Hello, World  ";
 print(text.trim());               // expect: Hello, World
@@ -33,10 +33,10 @@ print("hello"[0]);                // expect: h
 print("hello"[-1]);               // expect: o
 
 // Trimming one end at a time, for the cases where the other end matters.
-print("[" + "  hi  ".trim() + "]");        // expect: [hi]
-print("[" + "  hi  ".trim_start() + "]");  // expect: [hi  ]
-print("[" + "  hi  ".trim_end() + "]");    // expect: [  hi]
-print("[" + "\t x".trim_start() + "]");    // expect: [x]
-print("[" + "x \t".trim_end() + "]");      // expect: [x]
-print("[" + "".trim_start() + "]");        // expect: []
-print("[" + "abc".trim_end() + "]");       // expect: [abc]
+print("[" + "  hi  ".trim() + "]");       // expect: [hi]
+print("[" + "  hi  ".trim_start() + "]"); // expect: [hi  ]
+print("[" + "  hi  ".trim_end() + "]");   // expect: [  hi]
+print("[" + "\t x".trim_start() + "]");   // expect: [x]
+print("[" + "x \t".trim_end() + "]");     // expect: [x]
+print("[" + "".trim_start() + "]");       // expect: []
+print("[" + "abc".trim_end() + "]");      // expect: [abc]

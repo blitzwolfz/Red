@@ -17,7 +17,7 @@ try {
 } catch (e) {
   log.push(e.message);
 }
-print(log);                          // expect: [0, "escaped"]
+print(log); // expect: [0, "escaped"]
 
 // continue has the same problem and the same fix.
 let seen = [];
@@ -34,7 +34,7 @@ try {
 } catch (e) {
   seen.push(e.message);
 }
-print(seen);                         // expect: [1, 3, "escaped again"]
+print(seen); // expect: [1, 3, "escaped again"]
 
 // Nested try blocks, leaving both at once.
 let deep = [];
@@ -50,7 +50,7 @@ try {
 } catch (e) {
   deep.push(e.message);
 }
-print(deep);                         // expect: ["clean"]
+print(deep); // expect: ["clean"]
 
 // Running out of call frames is reported, not a crash.
 fun recurse(n) {
@@ -61,8 +61,8 @@ try {
   recurse(100000);
   print("no overflow reported");
 } catch (e) {
-  print(e.message.contains("Stack overflow"));   // expect: true
+  print(e.message.contains("Stack overflow")); // expect: true
 }
 
 // The program keeps going after catching it.
-print(recurse(50));                  // expect: 50
+print(recurse(50)); // expect: 50

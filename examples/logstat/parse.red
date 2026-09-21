@@ -67,7 +67,7 @@ class Report {
     this.lines += 1;
     this.bytes += request.bytes;
     this.byStatus.set(request.status,
-                      this.byStatus.get(request.status, 0) + 1);
+      this.byStatus.get(request.status, 0) + 1);
     this.byPath.set(request.path, this.byPath.get(request.path, 0) + 1);
     return this;
   }
@@ -91,9 +91,9 @@ class Report {
   busiest(limit) {
     const rows = this.byPath.entries();
     rows.sort(fun (a, b) {
-      if (a[1] != b[1]) { return a[1] > b[1]; }
-      return a[0] < b[0];
-    });
+        if (a[1] != b[1]) { return a[1] > b[1]; }
+        return a[0] < b[0];
+      });
     return rows.slice(0, min(limit, rows.len()));
   }
 

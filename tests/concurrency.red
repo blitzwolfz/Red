@@ -4,7 +4,7 @@
 // result.
 fun compute(n) { return n * n; }
 const task = spawn compute(9);
-print(task.join());                  // expect: 81
+print(task.join()); // expect: 81
 
 // Channels move values between tasks.
 fun producer(out, count) {
@@ -24,7 +24,7 @@ for (;;) {
   total = total + value;
 }
 producerTask.join();
-print(total);                        // expect: 15
+print(total); // expect: 15
 
 // Several workers sharing one queue. Results come back out of order, so
 // the test checks the set rather than the sequence.
@@ -53,13 +53,13 @@ for (;;) {
   if (value == nil) { break; }
   doubled.push(value);
 }
-print(doubled.len());                // expect: 12
-print(doubled.sort());               // expect: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24]
+print(doubled.len());  // expect: 12
+print(doubled.sort()); // expect: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24]
 
 // An unbuffered channel makes the sender wait for a receiver.
 const handoff = chan();
-const sender = spawn fun (ch) { ch.send("passed"); }(handoff);
-print(handoff.recv());               // expect: passed
+const sender = spawn fun (ch) { ch.send("passed"); } (handoff);
+print(handoff.recv()); // expect: passed
 sender.join();
 
 // An error inside a task surfaces when the task is joined.
@@ -68,7 +68,7 @@ const doomed = spawn failing();
 try {
   doomed.join();
 } catch (e) {
-  print(e.message.contains("task blew up"));  // expect: true
+  print(e.message.contains("task blew up")); // expect: true
 }
 
 // Tasks allocate on the shared heap, so the collector has to see their
@@ -92,7 +92,7 @@ for (;;) {
   if (finished.recv() == nil) { break; }
   count = count + 1;
 }
-print(count);                        // expect: 4
+print(count); // expect: 4
 
 // An error raised inside a task comes back out of join() as itself, with
 // the kind and payload it was raised with, so a catch clause on this
@@ -105,9 +105,9 @@ const failing = spawn cannotRead("data.txt");
 try {
   failing.join();
 } catch (e: "io") {
-  print(e.kind);                     // expect: io
-  print(e.message);                  // expect: cannot read 'data.txt'
-  print(e.payload);                  // expect: data.txt
+  print(e.kind);    // expect: io
+  print(e.message); // expect: cannot read 'data.txt'
+  print(e.payload); // expect: data.txt
 }
 
 // One the runtime raised, rather than the program.
@@ -116,7 +116,7 @@ const dividing = spawn divideByZero();
 try {
   dividing.join();
 } catch (e: "zero-division") {
-  print(e.message);                  // expect: Division by zero.
+  print(e.message); // expect: Division by zero.
 }
 
 // A task that throws something that is not an error still arrives as one.
@@ -125,5 +125,5 @@ const bare = spawn throwAString();
 try {
   bare.join();
 } catch (e: "user") {
-  print(e.message);                  // expect: a bare string
+  print(e.message); // expect: a bare string
 }

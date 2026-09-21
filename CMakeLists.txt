@@ -17,6 +17,7 @@ add_executable(red
   src/compiler.cpp
   src/debug.cpp
   src/debugger.cpp
+  src/format.cpp
   src/runtime.cpp
   src/regex.cpp
   src/scanner.cpp

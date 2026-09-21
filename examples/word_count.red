@@ -16,7 +16,7 @@ const WORKERS = 4;
 
 fun writeSample(path) {
   const words = ["red", "green", "blue", "red", "small", "fast", "red",
-                 "green", "clear", "simple"];
+    "green", "clear", "simple"];
   let lines = [];
   for (let i = 0; i < 2000; i = i + 1) {
     let line = [];

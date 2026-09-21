@@ -108,11 +108,11 @@ fun printJson(report, top) {
     paths.push("[${quote(path)}, ${count}]");
   }
   print("{" +
-        "\"lines\": ${report.lines}, " +
-        "\"skipped\": ${report.skipped}, " +
-        "\"bytes\": ${report.bytes}, " +
-        "\"status\": {" + statuses.join(", ") + "}, " +
-        "\"busiest\": [" + paths.join(", ") + "]}");
+    "\"lines\": ${report.lines}, " +
+    "\"skipped\": ${report.skipped}, " +
+    "\"bytes\": ${report.bytes}, " +
+    "\"status\": {" + statuses.join(", ") + "}, " +
+    "\"busiest\": [" + paths.join(", ") + "]}");
 }
 
 fun main() {

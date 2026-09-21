@@ -9,11 +9,11 @@ eprint("this belongs on the error stream");
 ewrite("so does this");
 ewrite(", and this\n");
 
-print("this is output");                  // expect: this is output
+print("this is output"); // expect: this is output
 write("built ");
 write("from parts");
-print("");                                // expect: built from parts
+print(""); // expect: built from parts
 
 // Both take several arguments, the same way print does.
 eprint("one", 2, [3]);
-print("one", 2, [3]);                     // expect: one 2 [3]
+print("one", 2, [3]); // expect: one 2 [3]

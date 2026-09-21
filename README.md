@@ -150,6 +150,7 @@ print(task.join());
 | `red compile in.red [-o out]` | Compiles ahead of time to a `.redc` file. |
 | `red test [directory]` | Runs the tests in a directory. |
 | `red debug script.red` | Runs a program under the debugger. |
+| `red fmt [-w] [files]` | Formats source. `--check` reports what would change. |
 | `red repl` | Interactive prompt. Handles multi-line input. |
 | `red disasm script.red` | Prints the compiled bytecode. |
 | `red bench` | Runs the benchmark programs. |
@@ -179,6 +180,19 @@ wordcount.red:14  in count
 
 It needs the source rather than a `.redc`, because a compiled file
 carries no names.
+
+`red fmt` formats source. It re-indents and re-spaces; it does not
+re-wrap, so where you put a line break, a line break stays. Every `.red`
+file in this repository is formatted with it, and continuous integration
+checks that they stay that way.
+
+```bash
+red fmt -w src.red          # rewrite in place
+red fmt --check *.red       # exit 1 if anything would change
+```
+
+It refuses rather than writes if the result would not read back as the
+same tokens, so a bug in it cannot mangle a file.
 
 ```
 $ red disasm examples/tiny.red
@@ -414,8 +428,9 @@ print(output.split("\n").len());
   the price of never taking exponentially long.
   [Why](docs/stdlib.md#regular-expressions).
 - POSIX only. It builds on macOS and Linux; there is no Windows port.
-- No language server and no formatter. Syntax highlighting is in
-  [editors/](editors).
+- No language server. Syntax highlighting is in [editors/](editors).
+- `red fmt` re-indents and re-spaces but does not re-wrap, so alignment
+  inside a long expression is not preserved.
 - The virtual machine, the collector and the standard library are still
   C++. Only the compiler is self-hosted.
 - There is no package manager. A library is installed by copying it onto

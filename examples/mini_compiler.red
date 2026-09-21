@@ -258,7 +258,7 @@ print("");
 // equals() compares contents. == on two arrays asks whether they are the
 // same array, which they are not.
 print("wrote ${blob.len()} bytes, read back ${reloaded.len()}, " +
-      "same contents: ${reloaded.equals(code)}, same array: ${reloaded == code}");
+  "same contents: ${reloaded.equals(code)}, same array: ${reloaded == code}");
 remove_file("./mini_output.tmp");
 
 // Errors carry kinds, so the driver can separate a bad program from a

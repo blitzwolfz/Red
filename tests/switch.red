@@ -9,27 +9,27 @@ fun describe(n) {
     default: return "many";
   }
 }
-print(describe(0));              // expect: zero
-print(describe(1));              // expect: one
-print(describe(3));              // expect: a few
-print(describe(9));              // expect: many
+print(describe(0)); // expect: zero
+print(describe(1)); // expect: one
+print(describe(3)); // expect: a few
+print(describe(9)); // expect: many
 
 // It works on strings too, and the subject is evaluated once.
 let calls = 0;
 fun subject() { calls += 1; return "b"; }
 switch (subject()) {
   case "a": print("first");
-  case "b": print("second");     // expect: second
+  case "b": print("second"); // expect: second
   default: print("other");
 }
-print(calls);                    // expect: 1
+print(calls); // expect: 1
 
 // With no match and no default, nothing runs.
 let ran = false;
 switch (99) {
   case 1: ran = true;
 }
-print(ran);                      // expect: false
+print(ran); // expect: false
 
 // Cases can hold several statements and their own declarations.
 switch (2) {
@@ -44,7 +44,7 @@ switch (2) {
 // Case values are expressions, not just literals.
 const target = 7;
 switch (3 + 4) {
-  case target: print("computed match");   // expect: computed match
+  case target: print("computed match"); // expect: computed match
   default: print("no");
 }
 
@@ -57,10 +57,10 @@ for (let i in [1, 2, 3, 4]) {
     default: collected.push(i);
   }
 }
-print(collected);                // expect: [1, 2]
+print(collected); // expect: [1, 2]
 
 // Equality is the same as ==, so a nil case matches nil.
 switch (nil) {
-  case nil: print("nil matched");         // expect: nil matched
+  case nil: print("nil matched"); // expect: nil matched
   default: print("no");
 }

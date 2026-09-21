@@ -14,17 +14,17 @@ let names = [];
 for (let name in ages) {
   names.push("${name}=${ages[name]}");
 }
-print(names.sort());             // expect: ["ann=31", "bob=25", "cal=40"]
+print(names.sort()); // expect: ["ann=31", "bob=25", "cal=40"]
 
 // A string yields its characters.
 let letters = [];
 for (let c in "abc") { letters.push(c); }
-print(letters);                  // expect: ["a", "b", "c"]
+print(letters); // expect: ["a", "b", "c"]
 
 // An empty subject runs the body zero times.
 let ran = false;
 for (let x in []) { ran = true; }
-print(ran);                      // expect: false
+print(ran); // expect: false
 
 // break and continue work, and leave the stack clean.
 let kept = [];
@@ -33,7 +33,7 @@ for (let n in [1, 2, 3, 4, 5, 6]) {
   if (n > 4) { break; }
   kept.push(n);
 }
-print(kept);                     // expect: [1, 3]
+print(kept); // expect: [1, 3]
 
 // Nested loops each keep their own position.
 let pairs = [];
@@ -42,7 +42,7 @@ for (let a in [1, 2]) {
     pairs.push("${a}${b}");
   }
 }
-print(pairs);                    // expect: ["1x", "1y", "2x", "2y"]
+print(pairs); // expect: ["1x", "1y", "2x", "2y"]
 
 // The loop variable is a fresh binding each time round, so a closure
 // made in the body captures that iteration's value.
@@ -50,7 +50,7 @@ let readers = [];
 for (let value in [1, 2, 3]) {
   readers.push(fun () { return value; });
 }
-print(readers[0](), readers[1](), readers[2]());   // expect: 1 2 3
+print(readers[0](), readers[1](), readers[2]()); // expect: 1 2 3
 
 // Walking a map is a snapshot of its keys, so adding entries during the
 // walk does not disturb it.
@@ -60,7 +60,7 @@ for (let key in growing) {
   seen += 1;
   growing["added ${seen}"] = seen;
 }
-print(seen, growing.len());      // expect: 1 2
+print(seen, growing.len()); // expect: 1 2
 
 // Leaving a for-in from inside a try closes the handler.
 for (let n in [1, 2, 3]) {
@@ -71,12 +71,12 @@ for (let n in [1, 2, 3]) {
 try {
   throw "clean";
 } catch (e) {
-  print(e.message);              // expect: clean
+  print(e.message); // expect: clean
 }
 
 // Walking something that is not a sequence is an error.
 try {
   for (let x in 42) { print(x); }
 } catch (e) {
-  print(e.message);              // expect: Cannot walk a value of type number.
+  print(e.message); // expect: Cannot walk a value of type number.
 }

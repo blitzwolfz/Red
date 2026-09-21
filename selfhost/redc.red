@@ -76,19 +76,19 @@ const TOKEN_KINDS = 72;
 // Binding power, weakest first. These are plain numbers rather than enum
 // members because binary() needs `precedence + 1`.
 const P_NONE = 0;
-const P_ASSIGNMENT = 1;   // =
-const P_OR = 2;           // or
-const P_AND = 3;          // and
-const P_EQUALITY = 4;     // == !=
-const P_COMPARISON = 5;   // < > <= >=
-const P_BIT_OR = 6;       // |
-const P_BIT_XOR = 7;      // ^
-const P_BIT_AND = 8;      // &
-const P_SHIFT = 9;        // << >>
-const P_TERM = 10;        // + -
-const P_FACTOR = 11;      // * / %
-const P_UNARY = 12;       // ! - ~
-const P_CALL = 13;        // . () []
+const P_ASSIGNMENT = 1; // =
+const P_OR = 2;         // or
+const P_AND = 3;        // and
+const P_EQUALITY = 4;   // == !=
+const P_COMPARISON = 5; // < > <= >=
+const P_BIT_OR = 6;     // |
+const P_BIT_XOR = 7;    // ^
+const P_BIT_AND = 8;    // &
+const P_SHIFT = 9;      // << >>
+const P_TERM = 10;      // + -
+const P_FACTOR = 11;    // * / %
+const P_UNARY = 12;     // ! - ~
+const P_CALL = 13;      // . () []
 const P_PRIMARY = 14;
 
 // What kind of body is being compiled.
@@ -228,7 +228,7 @@ class Scanner {
 
   make(type) {
     return Token(type, this.source.sub(this.start, this.current), "", 0,
-                 this.line);
+      this.line);
   }
 
   errorToken(message) {
@@ -243,7 +243,7 @@ class Scanner {
 
   isHexDigit(c) {
     return (c >= "0" and c <= "9") or (c >= "a" and c <= "f") or
-           (c >= "A" and c <= "F");
+    (c >= "A" and c <= "F");
   }
 
   hexValue(c) {
@@ -259,7 +259,7 @@ class Scanner {
     // number that large rather than meaning something different.
     const next = this.peek();
     if (this.source[this.start] == "0" and (next == "x" or next == "X") and
-        this.isHexDigit(this.peekNext())) {
+      this.isHexDigit(this.peekNext())) {
       this.current += 1;
       let value = 0;
       while (this.isHexDigit(this.peek())) {
@@ -347,24 +347,24 @@ class Scanner {
             }
             if (digits == 0 or (!braced and digits < 4)) {
               return this.errorToken(
-                  "A '\\u' escape needs four hex digits, or braces around " +
-                  "one to six.");
+                "A '\\u' escape needs four hex digits, or braces around " +
+                "one to six.");
             }
             if (braced and !this.match("}")) {
               return this.errorToken("Expect '}' to close a '\\u' escape.");
             }
             // 10ffff, and the surrogate range that UTF-8 has no form for.
             if (codePoint > 1114111 or
-                (codePoint >= 55296 and codePoint <= 57343)) {
+              (codePoint >= 55296 and codePoint <= 57343)) {
               return this.errorToken(
-                  "A '\\u' escape must name a code point up to 10ffff, and " +
-                  "not half of a surrogate pair.");
+                "A '\\u' escape must name a code point up to 10ffff, and " +
+                "not half of a surrogate pair.");
             }
             parts.push(char(codePoint));
           }
           default:
             return this.errorToken(
-                "Unknown escape sequence '\\${escape}'.");
+              "Unknown escape sequence '\\${escape}'.");
         }
         continue;
       }
@@ -779,7 +779,7 @@ class Writer {
       }
       default:
         throw error("cannot write a constant with tag ${constant.tag}",
-                    nil, "internal");
+          nil, "internal");
     }
   }
 }
@@ -1038,7 +1038,7 @@ class Compiler {
       where = " at '${token.lexeme}'";
     }
     reportLine("[${this.modulePath} line ${token.line}] Error${where}: " +
-               message);
+      message);
   }
 
   synchronize() {
@@ -1047,8 +1047,8 @@ class Compiler {
       if (this.previous.type == Tok.Semicolon) { return; }
       switch (this.current.type) {
         case Tok.Class, Tok.Enum, Tok.Fun, Tok.Let, Tok.Const, Tok.For,
-             Tok.If, Tok.While, Tok.Switch, Tok.Return, Tok.Try, Tok.Throw,
-             Tok.Import:
+          Tok.If, Tok.While, Tok.Switch, Tok.Return, Tok.Try, Tok.Throw,
+          Tok.Import:
           return;
       }
       this.advance();
@@ -1164,7 +1164,7 @@ class Compiler {
         default: return false;
       }
     } else if (op == Tok.Plus and left.tag == C_STRING and
-               right.tag == C_STRING) {
+      right.tag == C_STRING) {
       folded = stringConstant(left.value + right.value);
     } else {
       return false;
@@ -1184,8 +1184,8 @@ class Compiler {
   endScope() {
     this.state.scopeDepth -= 1;
     while (this.state.locals.len() > 0 and
-           this.state.locals[this.state.locals.len() - 1].depth >
-               this.state.scopeDepth) {
+      this.state.locals[this.state.locals.len() - 1].depth >
+      this.state.scopeDepth) {
       // A captured local lives on in an upvalue, so it has to move to the
       // heap rather than simply be discarded.
       if (this.state.locals[this.state.locals.len() - 1].isCaptured) {
@@ -1245,14 +1245,14 @@ class Compiler {
     // Usable straight away, including at the top level where
     // markInitialized does nothing.
     this.state.locals[this.state.locals.len() - 1].depth =
-        this.state.scopeDepth;
+    this.state.scopeDepth;
     return this.state.locals.len() - 1;
   }
 
   markInitialized() {
     if (this.state.scopeDepth == 0) { return; }
     this.state.locals[this.state.locals.len() - 1].depth =
-        this.state.scopeDepth;
+    this.state.scopeDepth;
   }
 
   defineVariable(global, isConst) {
@@ -1282,7 +1282,7 @@ class Compiler {
     const count = state.proto.upvalueCount;
     for (let i in range(0, count)) {
       if (state.upvalues[i].index == index and
-          state.upvalues[i].isLocal == isLocal) {
+        state.upvalues[i].isLocal == isLocal) {
         return i;
       }
     }
@@ -1344,7 +1344,7 @@ class Compiler {
 
     const isGlobal = getOp == Op.GetGlobal;
     const isConstBinding =
-        isConstLocal or (isGlobal and this.constGlobals.has(name));
+    isConstLocal or (isGlobal and this.constGlobals.has(name));
 
     const compound = this.matchCompound2(canAssign);
     if (compound != nil) {
@@ -1720,7 +1720,7 @@ class Compiler {
           // A rest parameter gathers whatever is left, so nothing can
           // follow it.
           const restConstant =
-              this.parseVariable("Expect a name after '...'.", false);
+          this.parseVariable("Expect a name after '...'.", false);
           state.proto.paramTypes.push("");
           this.defineVariable(restConstant, false);
           state.proto.hasRest = true;
@@ -1845,7 +1845,7 @@ class Compiler {
   whileStatement() {
     const loopStart = this.chunk().code.len();
     this.state.loops.push(
-        LoopState(loopStart, this.state.scopeDepth, this.state.tryDepth));
+      LoopState(loopStart, this.state.scopeDepth, this.state.tryDepth));
 
     this.consume(Tok.LeftParen, "Expect '(' after 'while'.");
     this.expression();
@@ -1928,7 +1928,7 @@ class Compiler {
     }
 
     this.state.loops.push(
-        LoopState(continueTarget, this.state.scopeDepth, this.state.tryDepth));
+      LoopState(continueTarget, this.state.scopeDepth, this.state.tryDepth));
     this.statement();
     this.emitLoop(loopStart);
 
@@ -1981,7 +1981,7 @@ class Compiler {
     const exitJump = this.chunk().code.len() - 2;
 
     this.state.loops.push(
-        LoopState(loopStart, this.state.scopeDepth, this.state.tryDepth));
+      LoopState(loopStart, this.state.scopeDepth, this.state.tryDepth));
 
     // ITER_NEXT leaves the element on top of the stack, which is exactly
     // the slot the loop variable occupies.
@@ -2011,7 +2011,7 @@ class Compiler {
   caseBody() {
     this.beginScope();
     while (!this.check(Tok.Case) and !this.check(Tok.Default) and
-           !this.check(Tok.RightBrace) and !this.check(Tok.Eof)) {
+      !this.check(Tok.RightBrace) and !this.check(Tok.Eof)) {
       this.declaration();
     }
     this.endScope();
@@ -2260,8 +2260,8 @@ class Compiler {
     const actionSlot = this.addHiddenLocal("  action");
 
     const context = FinallyContext(actionSlot, pendingSlot,
-                                   this.state.scopeDepth, this.state.tryDepth,
-                                   this.state.loops.len());
+      this.state.scopeDepth, this.state.tryDepth,
+      this.state.loops.len());
     this.state.finallys.push(context);
 
     const handlerJump = this.emitJump(Op.TryBegin);
@@ -2634,7 +2634,7 @@ class Compiler {
     let count = 0;
     if (!this.check(Tok.RightBracket)) {
       for (;;) {
-        if (this.check(Tok.RightBracket)) { break; }  // allow a trailing comma
+        if (this.check(Tok.RightBracket)) { break; } // allow a trailing comma
         this.expression();
         count += 1;
         if (count > 65535) { this.error("Too many elements in an array literal."); }
@@ -2653,7 +2653,7 @@ class Compiler {
     let count = 0;
     if (!this.check(Tok.RightBrace)) {
       for (;;) {
-        if (this.check(Tok.RightBrace)) { break; }  // allow a trailing comma
+        if (this.check(Tok.RightBrace)) { break; } // allow a trailing comma
         this.expression();
         this.consume(Tok.Colon, "Expect ':' after a map key.");
         this.expression();

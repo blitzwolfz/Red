@@ -16,6 +16,7 @@
 #include "compiler.h"
 #include "debug.h"
 #include "debugger.h"
+#include "format.h"
 #include "runtime.h"
 #include "scanner.h"
 #include "serialize.h"
@@ -46,6 +47,7 @@ void printUsage() {
       "  red repl                     start the interactive prompt\n"
       "  red test [directory]         run the tests in a directory\n"
       "  red debug <script.red>       run a program under the debugger\n"
+      "  red fmt [-w|--check] [files] format source, or standard input\n"
       "  red disasm <program>         print the compiled bytecode\n"
       "  red legacy <script.red>      run a script on the v1 Java interpreter\n"
       "  red bench [directory]        run the benchmark suite\n"
@@ -183,6 +185,68 @@ int debugScript(Runtime& runtime, const std::string& path,
 
   if (status == InterpretResult::CompileError) return kExitCompileError;
   if (status == InterpretResult::RuntimeError) return kExitRuntimeError;
+  return 0;
+}
+
+// `red fmt` reads files, or standard input when given none.
+int formatFiles(const std::vector<std::string>& paths, bool write,
+                bool check) {
+  if (paths.empty()) {
+    std::string source;
+    int c;
+    while ((c = std::fgetc(stdin)) != EOF) source += (char)c;
+    std::string out;
+    std::string reason;
+    if (!formatSource(source, &out, &reason)) {
+      std::fprintf(stderr, "stdin: %s\n", reason.c_str());
+      return kExitCompileError;
+    }
+    std::fwrite(out.data(), 1, out.size(), stdout);
+    return 0;
+  }
+
+  int changed = 0;
+  int failed = 0;
+  for (const std::string& path : paths) {
+    std::string source;
+    if (!readFile(absolutePath(path), &source)) {
+      std::fprintf(stderr, "Cannot open '%s'.\n", path.c_str());
+      failed++;
+      continue;
+    }
+    std::string out;
+    std::string reason;
+    if (!formatSource(source, &out, &reason)) {
+      std::fprintf(stderr, "%s: %s\n", path.c_str(), reason.c_str());
+      failed++;
+      continue;
+    }
+    if (out == source) continue;
+    changed++;
+
+    if (check) {
+      std::printf("%s\n", path.c_str());
+      continue;
+    }
+    if (!write) {
+      std::fwrite(out.data(), 1, out.size(), stdout);
+      continue;
+    }
+    FILE* handle = std::fopen(path.c_str(), "wb");
+    if (handle == nullptr) {
+      std::fprintf(stderr, "Cannot write '%s'.\n", path.c_str());
+      failed++;
+      continue;
+    }
+    std::fwrite(out.data(), 1, out.size(), handle);
+    std::fclose(handle);
+    std::printf("%s\n", path.c_str());
+  }
+
+  if (failed > 0) return kExitCompileError;
+  // --check reports "something would change" the way every other
+  // formatter does, so it can gate a build.
+  if (check && changed > 0) return 1;
   return 0;
 }
 
@@ -823,6 +887,21 @@ int main(int argc, const char* argv[]) {
     return 0;
   }
   if (command == "repl") return runRepl(runtime);
+  if (command == "fmt") {
+    bool write = false;
+    bool check = false;
+    std::vector<std::string> files;
+    for (size_t i = 1; i < positional.size(); i++) {
+      if (positional[i] == "-w") {
+        write = true;
+      } else if (positional[i] == "--check") {
+        check = true;
+      } else {
+        files.push_back(positional[i]);
+      }
+    }
+    return formatFiles(files, write, check);
+  }
   if (command == "debug") {
     if (positional.size() < 2) {
       std::fprintf(stderr, "Usage: red debug <script.red> [args...]\n");
