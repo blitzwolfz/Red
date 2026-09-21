@@ -37,6 +37,8 @@ void installOS(Runtime& runtime);
 void installNet(Runtime& runtime);
 void installConcurrency(Runtime& runtime);
 void installFFI(Runtime& runtime);
+void installProcess(Runtime& runtime);
+void installRegex(Runtime& runtime);
 void installLegacy(Runtime& runtime);
 
 // Absolute path of the bundled legacy jar, or an empty string when it is

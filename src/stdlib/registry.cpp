@@ -105,6 +105,8 @@ void installBuiltins(Runtime& runtime) {
   installNet(runtime);
   installConcurrency(runtime);
   installFFI(runtime);
+  installProcess(runtime);
+  installRegex(runtime);
   installLegacy(runtime);
 }
 

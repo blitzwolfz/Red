@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(red LANGUAGES C CXX VERSION 0.2.0)
+project(red LANGUAGES C CXX VERSION 0.3.0)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,6 +17,7 @@ add_executable(red
   src/compiler.cpp
   src/debug.cpp
   src/runtime.cpp
+  src/regex.cpp
   src/scanner.cpp
   src/serialize.cpp
   src/table.cpp
@@ -30,6 +31,8 @@ add_executable(red
   src/stdlib/net.cpp
   src/stdlib/conc.cpp
   src/stdlib/ffi.cpp
+  src/stdlib/process.cpp
+  src/stdlib/re.cpp
   src/stdlib/legacy.cpp
 )
 
