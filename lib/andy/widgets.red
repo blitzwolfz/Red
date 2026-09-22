@@ -1426,11 +1426,17 @@ class Input < Widget {
     surface.fill(area, " ", base);
     this.reveal(area.width);
 
-    const empty = this.cells.len() == 0;
-    if (empty and this.placeholder != "" and !ui.is_focused(this)) {
+    // The placeholder stays while the field is empty, focused or not. A
+    // focused empty field with the placeholder hidden is a field with
+    // nothing in it at all, which is indistinguishable from no field.
+    // The caret is drawn over it, at the start, where typing will begin.
+    if (this.cells.len() == 0 and this.placeholder != "") {
       surface.text(area.x, area.y,
                    text.ellipsize(this.placeholder, area.width),
                    ui.style("input.placeholder"), area.width);
+      if (ui.is_focused(this) and this.enabled) {
+        surface.place_cursor(area.x, area.y);
+      }
       return this;
     }
 

@@ -16,6 +16,7 @@
 import "andy/geom" as geom;
 import "andy/canvas" as canvas;
 import "andy/event" as event;
+import "andy/color" as color;
 
 // The methods a backend provides. Subclassing this is not required —
 // anything with these methods will do — but it documents the contract
@@ -59,8 +60,11 @@ class Backend {
   // say so — a list that cannot be clicked should not look clickable.
   has_mouse() { return false; }
 
-  // How much colour the screen can show, as a color.Depth.
-  depth() { return 0; }
+  // How much colour the screen can show, as a color.Depth. None is the
+  // safe answer for a screen that has not said: an interface drawn in
+  // one colour is legible everywhere, and one drawn in sixteen on a
+  // screen that has two is not.
+  depth() { return color.Depth.None; }
 
   // Put text on the system clipboard. Not every backend can; the ones
   // that cannot say so, and a program can fall back to showing the text
@@ -102,7 +106,12 @@ class Headless < Backend {
     this.mouse = true;
     this.clipboard = "";
     this.bells = 0;
+    // Cells are kept whole, styles and all, so there is no palette here
+    // to reduce anything to.
+    this.color_depth = color.Depth.TrueColor;
   }
+
+  depth() { return this.color_depth; }
 
   size() { return geom.Size(this.width, this.height); }
 

@@ -98,11 +98,17 @@ print(after.diff(after).len());                     // expect: 0
 const Item = layout.Item;
 print(layout.distribute(30, [Item(10), Item(10), Item(10)]));       // expect: [10, 10, 10]
 print(layout.distribute(30, [Item(5, 1), Item(5, 1), Item(5, 2)])); // expect: [9, 9, 12]
-print(layout.distribute(12, [Item(10), Item(10), Item(10)]));       // expect: [4, 4, 4]
+// Flexible things give way in proportion: a share of too little is less.
+print(layout.distribute(12, [Item(10, 1), Item(10, 1), Item(10, 1)]));
+// expect: [4, 4, 4]
+// Things that asked for a size rather than a share have no proportion
+// to honour, so what goes is the last of them. A column too short shows
+// what is at the top; a row too narrow shows the first thing whole.
+print(layout.distribute(12, [Item(10), Item(10), Item(10)])); // expect: [10, 2, 0]
 // A maximum pins one and its share goes to the others.
 print(layout.distribute(30, [Item(5, 1, 0, 8), Item(5, 1), Item(5, 2)])); // expect: [8, 9, 13]
-// A minimum holds one up and the rest give way.
-print(layout.distribute(12, [Item(10, 0, 8), Item(10), Item(10)])); // expect: [8, 2, 2]
+// A minimum holds one up and the rest give way further.
+print(layout.distribute(12, [Item(10), Item(10), Item(10, 0, 8)])); // expect: [4, 0, 8]
 // The sizes add up to exactly what there was, whatever the rounding.
 print(layout.distribute(31, [Item(0, 1), Item(0, 1), Item(0, 1)]));    // expect: [10, 11, 10]
 print(layout.columns(["10", "1fr", "auto", "2fr"], 60, [0, 0, 7, 0])); // expect: [10, 14, 7, 29]

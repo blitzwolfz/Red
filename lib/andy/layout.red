@@ -135,14 +135,44 @@ fun grow(sizes, items, extra) {
   return sizes;
 }
 
-// Takes `deficit` away, in proportion to what each item currently has,
-// down to its minimum. An item that reaches its minimum drops out and
-// what it could not give up is taken from the others.
+// Takes `deficit` away, in two passes.
+//
+// **Flexible items give way first, in proportion to what they have.** An
+// item with flex said it would take a share of whatever there was, and a
+// share of too little is less. Three panes in half the room they asked
+// for become three half sized panes.
+//
+// **Whatever is still owed is taken from the end.** Items with no flex
+// asked for a size rather than a share, so there is no proportion to
+// honour, and something has to go. What goes is the last of them: a
+// column too short for its contents should lose what is at the bottom,
+// which is the part nobody has read yet, and a row too narrow should
+// show the first thing whole rather than three things in pieces.
+//
+// Nothing is taken below an item's minimum in either pass.
 fun shrink(sizes, items, deficit) {
+  let remaining = shrink_flexible(sizes, items, deficit);
+  if (remaining <= 0) { return sizes; }
+
+  for (let n in range(0, items.len())) {
+    if (remaining <= 0) { break; }
+    const i = items.len() - 1 - n;
+    const room = sizes[i] - items[i].minimum;
+    if (room <= 0) { continue; }
+    const take = min(room, remaining);
+    sizes[i] -= take;
+    remaining -= take;
+  }
+  return sizes;
+}
+
+// The proportional pass. Gives back what it could not take, either
+// because nothing had flex or because everything reached its minimum.
+fun shrink_flexible(sizes, items, deficit) {
   let remaining = deficit;
   const open = [];
   for (let i in range(0, items.len())) {
-    if (sizes[i] > items[i].minimum) { open.push(i); }
+    if (items[i].flex > 0 and sizes[i] > items[i].minimum) { open.push(i); }
   }
 
   while (remaining > 0 and open.len() > 0) {
@@ -153,14 +183,13 @@ fun shrink(sizes, items, deficit) {
 
     const pinned = [];
     let taken = 0;
+    // Shares are cut from a running total rather than rounded one at a
+    // time, so the rounding is spread across the row instead of piling
+    // up on whichever item happens to be last.
     let ideal = 0;
     let issued = 0;
-    // Walked from the end, so that when there is not enough to go round
-    // the rounding falls on the last items rather than the first. A
-    // column too short for everything in it should lose what is at the
-    // bottom, which is the part the reader has not got to yet.
     for (let n in range(0, open.len())) {
-      const i = open[open.len() - 1 - n];
+      const i = open[n];
       const room = sizes[i] - items[i].minimum;
       ideal += take * room / available;
       let share = round(ideal) - issued;
@@ -181,7 +210,7 @@ fun shrink(sizes, items, deficit) {
     open.clear();
     for (let i in still) { open.push(i); }
   }
-  return sizes;
+  return remaining;
 }
 
 // Where a run of `size` sits inside `total`, given an alignment. Stretch
