@@ -8,22 +8,24 @@ import "andy" as andy;
 
 const name = andy.Input("", "your name");
 
-const root = andy.Panel("Hello",
-  andy.Column(
-    andy.Label("What should I call you?"),
-    name,
-    andy.Row(andy.Spacer(),
-             andy.Button("Done", fun (b) { andy.stop(); })),
-  ).spaced(1).padded(andy.uniform(1)));
+const form = andy.Column(
+  andy.Label("What should I call you?"),
+  name,
+  andy.Row(andy.Spacer(), andy.Button("Done", fun (b) { andy.stop(); }))
+).spaced(1).padded(andy.uniform(1));
 
-andy.run(root, {"title": "Hello"});
+andy.run(andy.Center(andy.Panel("Hello", form).sized(44, 9)),
+  {"title": "Hello"});
+
 print("hello, ${name.get_value()}");
 ```
 
+That is [`examples/andy_hello.red`](../examples/andy_hello.red).
+
 ```
-$ red hello.red                        in the terminal it was started in
-$ ANDY_BACKEND=native red hello.red    in a window
-$ ANDY_THEME=light red hello.red       in daylight
+$ red examples/andy_hello.red                     in this terminal
+$ ANDY_BACKEND=native red examples/andy_hello.red in a window
+$ ANDY_THEME=light red examples/andy_hello.red    in daylight
 ```
 
 [`examples/andy_demo.red`](../examples/andy_demo.red) is a program that
@@ -114,11 +116,14 @@ afterwards, and returns the widget, so an interface is one expression
 with the shape of the thing it describes.
 
 ```red
-andy.Column(
+const form = andy.Column(
   andy.Row(andy.Label("Name"), andy.Input().growing(1)),
-  andy.Row(andy.Label("Note"), andy.Input().growing(1)),
-).spaced(1).padded(andy.uniform(1))
+  andy.Row(andy.Label("Note"), andy.Input().growing(1))
+).spaced(1).padded(andy.uniform(1));
 ```
+
+Red has no trailing commas in an argument list, so the last child of a
+container has none.
 
 These are on every widget:
 
@@ -259,10 +264,17 @@ shipping one.
 
 Four methods. A widget that overrides none of them is a blank rectangle.
 
+A class cannot be derived from one reached through a module — `class
+Spinner < andy.Widget` is a syntax error — so the base is bound to a
+name first. That is a property of the language rather than of andy, and
+it is the one thing about writing a widget that is not obvious.
+
 ```red
 import "andy" as andy;
 
-class Spinner < andy.Widget {
+const Widget = andy.Widget;
+
+class Spinner < Widget {
   init() {
     super.init();
     this.at = 0;

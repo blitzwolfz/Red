@@ -228,18 +228,23 @@ import "andy" as andy;
 
 const name = andy.Input("", "your name");
 
-andy.run(andy.Panel("Hello",
-  andy.Column(
-    andy.Label("What should I call you?"),
-    name,
-    andy.Row(andy.Spacer(), andy.Button("Done", fun (b) { andy.stop(); })),
-  ).spaced(1).padded(andy.uniform(1))));
+const form = andy.Column(
+  andy.Label("What should I call you?"),
+  name,
+  andy.Row(andy.Spacer(), andy.Button("Done", fun (b) { andy.stop(); }))
+).spaced(1).padded(andy.uniform(1));
+
+andy.run(andy.Center(andy.Panel("Hello", form).sized(44, 9)),
+  {"title": "Hello"});
 
 print("hello, ${name.get_value()}");
 ```
 
+That is [`examples/andy_hello.red`](examples/andy_hello.red). For a tour of
+the rest:
+
 ```bash
-./build/red examples/andy_demo.red                  # in this terminal
+./build/red examples/andy_demo.red                       # in this terminal
 ANDY_BACKEND=native ./build/red examples/andy_demo.red   # in a window
 ```
 
