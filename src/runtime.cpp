@@ -1,6 +1,7 @@
 #include "runtime.h"
 
 #include <cassert>
+#include <chrono>
 
 #include <cstdio>
 #include <cstdlib>
@@ -99,8 +100,8 @@ Thread* Runtime::newThread() {
   // collector waits for this caller while the caller waits for the lock.
   Thread* caller = t_thread;
   if (caller != nullptr) {
-    caller->parked.store(true, std::memory_order_release);
-    worldCond_.notify_all();
+    caller->parked.store(true, std::memory_order_seq_cst);
+    announceParked();
   }
   std::unique_lock<std::mutex> guard(worldMutex_);
   // The collector walks this list without holding the mutex, so it must
@@ -135,8 +136,8 @@ void Runtime::detachThread(Thread* thread) {
   // collector may already be stopping the world while this thread is on
   // its way out; waiting for that lock first would leave the collector
   // waiting on this thread in return.
-  thread->parked.store(true, std::memory_order_release);
-  worldCond_.notify_all();
+  thread->parked.store(true, std::memory_order_seq_cst);
+  announceParked();
   std::unique_lock<std::mutex> guard(worldMutex_);
   // Same reason as newThread: the list this thread is about to leave is
   // one the collector may be walking.
@@ -194,11 +195,20 @@ void Runtime::reachSafepoint() {
   self->parked.store(false, std::memory_order_release);
 }
 
+void Runtime::announceParked() {
+  // Ordered against stopWorld()'s store of this flag: see runtime.h.
+  if (!worldWaiting_.load(std::memory_order_seq_cst)) return;
+  // Taken so that the notify cannot land in the gap between the
+  // collector looking at the thread list and waiting.
+  std::lock_guard<std::mutex> guard(worldMutex_);
+  worldCond_.notify_all();
+}
+
 void Runtime::park() {
   if (t_thread != nullptr) {
-    t_thread->parked.store(true, std::memory_order_release);
+    t_thread->parked.store(true, std::memory_order_seq_cst);
   }
-  worldCond_.notify_all();
+  announceParked();
 }
 
 void Runtime::unpark() {
@@ -236,17 +246,24 @@ void Runtime::stopWorld(std::unique_lock<std::mutex>& guard) {
   Thread* self = t_thread;
   if (self != nullptr) self->parked.store(true, std::memory_order_release);
 
+  // Published before the thread list is read, and read by a parking
+  // thread after it has set its own flag. runtime.h has the argument.
+  worldWaiting_.store(true, std::memory_order_seq_cst);
   for (;;) {
     bool allParked = true;
     for (Thread* thread : threads_) {
-      if (!thread->parked.load(std::memory_order_acquire)) {
+      if (!thread->parked.load(std::memory_order_seq_cst)) {
         allParked = false;
         break;
       }
     }
     if (allParked) break;
-    worldCond_.wait(guard);
+    // A bounded wait, as a second line of defence. The flag above is
+    // what makes the notify reliable; this is what keeps a signal lost
+    // some other way costing a millisecond rather than the program.
+    worldCond_.wait_for(guard, std::chrono::milliseconds(1));
   }
+  worldWaiting_.store(false, std::memory_order_seq_cst);
 }
 
 void Runtime::startWorld() {

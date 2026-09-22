@@ -279,12 +279,37 @@ class Runtime {
 
   // Set while a collection is waiting for the threads to park.
   std::atomic<bool> gcPending{false};
+  // Set, under worldMutex_, while stopWorld() is in its wait loop.
+  //
+  // A thread that parks stores its flag and then reads this; stopWorld
+  // stores this and then reads the flags. Both pairs are sequentially
+  // consistent, so at least one of them sees the other: either the
+  // parking thread finds a collector to notify and takes worldMutex_ to
+  // do it, which cannot overlap the collector's own look at the list, or
+  // the collector's look already includes that thread as parked. It is
+  // the same argument two threads deciding who goes first have always
+  // used, and it means the notify costs one relaxed load on the path
+  // where nobody is collecting.
+  std::atomic<bool> worldWaiting_{false};
   std::mutex internMutex_;
   std::mutex worldMutex_;
   std::condition_variable worldCond_;
   std::vector<Thread*> threads_;
 
   void reachSafepoint();
+  // Tells a collector that is waiting for the world to stop that this
+  // thread has parked.
+  //
+  // The signal is a condition variable, and the three places that send
+  // it park a thread and then notify without holding worldMutex_, on
+  // purpose: taking a global lock on every park would serialise every
+  // worker, and parking is what a fiber does on every switch. The cost
+  // of not taking it is that a notify landing between the collector's
+  // look at the thread list and its wait() is delivered to nobody, and
+  // the collector then waits for a thread that has already parked.
+  //
+  // worldWaiting_ closes that window. See the note on it.
+  void announceParked();
   // Parks the caller and waits for every other thread to park. The
   // caller holds worldMutex_ and keeps holding it, so the world stays
   // stopped until startWorld() lets it go.
