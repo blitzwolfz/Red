@@ -278,8 +278,14 @@ Value socketWrite(VM& vm, int argCount, Value* args) {
 Value socketClose(VM&, int, Value* args) {
   ObjSocket* socket = asSocket(args[0]);
   if (!socket->closed && socket->fd >= 0) {
-    ::close(socket->fd);
+    // Whoever is parked on this descriptor has to be let go before it
+    // goes away: closing it takes it out of the poller without a word,
+    // and a task waiting for a readiness that can now never arrive would
+    // wait forever. This is what ends an accept loop when its listening
+    // socket is closed.
     socket->closed = true;
+    Scheduler::wakeOnClose(socket->fd);
+    ::close(socket->fd);
     socket->fd = -1;
   }
   return nilValue();

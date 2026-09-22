@@ -63,12 +63,6 @@ std::vector<std::string> splitOn(const std::string& text, char separator) {
   return parts;
 }
 
-bool isDirectory(const std::string& path) {
-  struct stat info;
-  if (::stat(path.c_str(), &info) != 0) return false;
-  return S_ISDIR(info.st_mode);
-}
-
 // mkdir -p. Returns false only when a component exists and is not a
 // directory, or cannot be made.
 bool makeDirectories(const std::string& path) {

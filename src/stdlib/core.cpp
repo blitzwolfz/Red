@@ -406,7 +406,12 @@ Value nativeCeil(VM& vm, int, Value* args) {
 Value nativeSqrt(VM& vm, int, Value* args) {
   double value;
   if (!wantNumber(vm, args[0], "sqrt()", &value)) return nilValue();
-  if (value < 0) return vm.fail("sqrt() of a negative number.");
+  if (value < 0) {
+    // "domain", like the other functions that have no answer for an
+    // argument. It was the one that said "runtime" instead.
+    return vm.failAs("domain", "sqrt() of a negative number: %s.",
+                     valueToString(args[0]).c_str());
+  }
   return numberValue(std::sqrt(value));
 }
 

@@ -238,6 +238,8 @@ class Poller {
   // Both are called with lock_ held by the fiber that is about to park.
   void add(Waiter* waiter);
   void remove(Waiter* waiter);
+  // Wakes both sides of a descriptor, as not ready. Takes lock_ itself.
+  void closing(int fd);
 
   std::mutex& lock() { return lock_; }
   int waiting() const { return waitingCount_.load(std::memory_order_relaxed); }
@@ -514,6 +516,21 @@ void Poller::remove(Waiter* waiter) {
   }
   waiter->nextOnFd = nullptr;
   waitingCount_.fetch_sub(1, std::memory_order_relaxed);
+}
+
+void Poller::closing(int fd) {
+  std::lock_guard<std::mutex> guard(lock_);
+  // Left registered: each waiter takes itself off the lists when it
+  // wakes, under this lock, which is the only place that is safe.
+  for (int side = 0; side < 2; side++) {
+    std::map<int, Waiter*>& waiters = side == 0 ? readers_ : writers_;
+    auto found = waiters.find(fd);
+    if (found == waiters.end()) continue;
+    for (Waiter* waiter = found->second; waiter != nullptr;
+         waiter = waiter->nextOnFd) {
+      wake(waiter);
+    }
+  }
 }
 
 void Poller::wake(Waiter* waiter) {
@@ -1026,6 +1043,11 @@ bool Scheduler::waitReady(int fd, bool forWrite, double timeout) {
     ready = waiter.ready;
   }
   return ready;
+}
+
+void Scheduler::wakeOnClose(int fd) {
+  if (fd < 0 || !impl().running) return;
+  impl().poller.closing(fd);
 }
 
 bool Scheduler::spawn(Runtime& runtime, ObjTask* task) {

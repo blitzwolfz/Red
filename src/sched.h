@@ -102,6 +102,13 @@ class Scheduler {
   // native can call it either way and get the same answer.
   static bool waitReady(int fd, bool forWrite, double timeout);
 
+  // Wakes everything waiting on a descriptor, reporting it as not ready.
+  // Called just before the descriptor is closed: closing one takes it
+  // out of kqueue and epoll silently, so a task parked on it would
+  // otherwise wait for a readiness that can never be reported. An accept
+  // loop ended by closing its listening socket is the usual case.
+  static void wakeOnClose(int fd);
+
   // ---- for something that really does block the thread ------------
   //
   // Reading a file, running a subprocess and calling into a C extension

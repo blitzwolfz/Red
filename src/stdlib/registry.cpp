@@ -1,5 +1,7 @@
 #include "builtins.h"
 
+#include <sys/stat.h>
+
 #include <cstdlib>
 
 #include "../util.h"
@@ -52,14 +54,43 @@ std::vector<std::string> librarySearchPaths() {
   return directories;
 }
 
+namespace {
+
+// The file a request names inside one directory, with the same
+// shorthands a package path gets: the .red suffix may be left off, and a
+// directory is entered through the file named after it.
+std::string resolveInDirectory(const std::string& directory,
+                               const std::string& request) {
+  std::string candidate = absolutePath(joinPath(directory, request));
+  if (fileExists(candidate) && !isDirectory(candidate)) return candidate;
+
+  if (request.size() < 4 ||
+      request.compare(request.size() - 4, 4, ".red") != 0) {
+    std::string suffixed = candidate + ".red";
+    if (fileExists(suffixed)) return suffixed;
+  }
+  if (isDirectory(candidate)) {
+    std::string leaf = request.substr(request.find_last_of('/') + 1);
+    const char* const entries[] = {nullptr, "mod.red", "lib.red", "main.red"};
+    for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
+      std::string file = joinPath(
+          candidate, i == 0 ? leaf + ".red" : std::string(entries[i]));
+      if (fileExists(file) && !isDirectory(file)) return file;
+    }
+  }
+  return "";
+}
+
+}  // namespace
+
 std::string findOnLibraryPath(const std::string& request) {
   if (request.empty()) return "";
   if (request.front() == '/') {
     return fileExists(request) ? request : "";
   }
   for (const std::string& directory : librarySearchPaths()) {
-    std::string candidate = absolutePath(joinPath(directory, request));
-    if (fileExists(candidate)) return candidate;
+    std::string found = resolveInDirectory(directory, request);
+    if (!found.empty()) return found;
   }
   return "";
 }

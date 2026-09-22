@@ -13,6 +13,12 @@ bool fileExists(const std::string& path) {
   return ::stat(path.c_str(), &info) == 0;
 }
 
+bool isDirectory(const std::string& path) {
+  struct stat info;
+  if (::stat(path.c_str(), &info) != 0) return false;
+  return S_ISDIR(info.st_mode);
+}
+
 bool readFile(const std::string& path, std::string* out) {
   FILE* file = std::fopen(path.c_str(), "rb");
   if (file == nullptr) return false;
