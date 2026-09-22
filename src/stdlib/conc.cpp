@@ -281,11 +281,18 @@ Value nativeSelect(VM& vm, int argCount, Value* args) {
         Value value = channel->buffer.front();
         channel->buffer.pop_front();
         wakeChannel(vm, channel);
+        Value source = channels->items[(i + offset) % count];
 
         guard.unlock();
+        // Taking the value out of the buffer took away the last thing
+        // that referred to it: it is now held only by a C++ local, and
+        // the array made below can collect. The channel needs no root
+        // of its own, because the array it came from is an argument and
+        // so is on the stack.
+        GCRoot valueRoot(vm.runtime(), value);
         ObjArray* pair = vm.runtime().newArray();
         GCRoot pairRoot(vm.runtime(), (Obj*)pair);
-        pair->items.push_back(channels->items[(i + offset) % count]);
+        pair->items.push_back(source);
         pair->items.push_back(value);
         return objValue((Obj*)pair);
       }

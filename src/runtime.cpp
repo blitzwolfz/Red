@@ -180,9 +180,24 @@ void Runtime::detachThread(Thread* thread) {
 
 void Runtime::clearThreadVM(Thread* thread, VM* vm) {
   if (thread == nullptr) return;
+  // Parked before waiting, for the reason detachThread gives: a
+  // collection may already be stopping the world, and waiting for it
+  // while this thread still counts as running is a deadlock. The
+  // collector waits for this thread to park; this thread waits for the
+  // collector to finish; neither can move.
+  //
+  // Parking is honest here as well as necessary. The VM this is being
+  // called for has finished, so there is nothing on this thread's stack
+  // left for the collector to be disturbed by.
+  bool wasParked = thread->parked.exchange(true, std::memory_order_seq_cst);
+  announceParked();
+
   std::unique_lock<std::mutex> guard(worldMutex_);
   while (collecting_) worldCond_.wait(guard);
   if (thread->vm == vm) thread->vm = nullptr;
+  // Put back as it was. Safe under this lock and with no collection in
+  // progress: starting one needs this same lock.
+  if (!wasParked) thread->parked.store(false, std::memory_order_release);
 }
 
 void Runtime::reachSafepoint() {
@@ -249,6 +264,13 @@ void Runtime::stopWorld(std::unique_lock<std::mutex>& guard) {
   // Published before the thread list is read, and read by a parking
   // thread after it has set its own flag. runtime.h has the argument.
   worldWaiting_.store(true, std::memory_order_seq_cst);
+  // Every thread reaches a safepoint in microseconds. Waiting seconds
+  // for one means something is wrong that no amount of further waiting
+  // will fix, and the useful thing to know is which thread and what it
+  // was doing. Printed rather than asserted, because a report from a run
+  // that then continues is worth more than a crash.
+  constexpr int kReportAfter = 5000;  // milliseconds
+  int waited = 0;
   for (;;) {
     bool allParked = true;
     for (Thread* thread : threads_) {
@@ -262,6 +284,20 @@ void Runtime::stopWorld(std::unique_lock<std::mutex>& guard) {
     // what makes the notify reliable; this is what keeps a signal lost
     // some other way costing a millisecond rather than the program.
     worldCond_.wait_for(guard, std::chrono::milliseconds(1));
+    if (++waited >= kReportAfter) {
+      waited = 0;
+      std::fprintf(stderr,
+                   "[gc] stop-the-world has waited 5s: %zu threads, "
+                   "collecting=%d\n",
+                   threads_.size(), collecting_ ? 1 : 0);
+      for (Thread* thread : threads_) {
+        std::fprintf(stderr,
+                     "[gc]   thread=%p parked=%d vm=%p collector=%d\n",
+                     (void*)thread, thread->parked.load() ? 1 : 0,
+                     (void*)thread->vm, thread == self ? 1 : 0);
+      }
+      std::fflush(stderr);
+    }
   }
   worldWaiting_.store(false, std::memory_order_seq_cst);
 }
