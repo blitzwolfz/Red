@@ -274,6 +274,28 @@ print(term.style_sequence(style.Style(color.RED, color.BLUE, style.BOLD),
 print(term.base64("hello"), term.base64("hi"), term.base64("h"));
 // expect: aGVsbG8= aGk= aA==
 
+// A frame with nothing to compare against erases the screen first. A
+// frame only covers the canvas, so after a terminal shrinks there are
+// columns to the right of it that nothing would ever write over again,
+// and whatever the old wider frame left there would stay.
+const wide = canvas.Canvas(8, 1);
+wide.text(0, 0, "abcdefgh");
+const opening = term.frame_bytes(wide, nil, color.Depth.None);
+print(opening.contains(ESC + "[2J"), opening.contains("abcdefgh"));
+// expect: true true
+
+// A frame that follows one sends the difference and no erase.
+const narrow = wide.snapshot();
+narrow.text(0, 0, "Z");
+const following = term.frame_bytes(narrow, wide, color.Depth.None);
+print(following.contains(ESC + "[2J"), following.contains("Z"));
+// expect: false true
+
+// A frame identical to the one before it sends nothing at all, which is
+// what makes an idle program cost nothing.
+print(repr(term.frame_bytes(wide, wide, color.Depth.None)));
+// expect: ""
+
 // ---- what is installed ----
 
 // The headless backend is always there; the other two depend on the

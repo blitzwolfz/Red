@@ -433,6 +433,46 @@ fun mouse_event(numbers, pressed) {
   return event.Mouse("press", x, y, button + 1, 0, ctrl, alt, shift);
 }
 
+// The bytes that turn `previous` into `surface` on a terminal of this
+// colour depth, or "" when there is nothing to do.
+//
+// A plain function rather than a method, so that what andy would send
+// can be examined without a terminal to send it to — the same reason
+// decode() above is one.
+fun frame_bytes(surface, previous, depth) {
+  const runs = surface.diff(previous);
+  if (runs.len() == 0 and previous != nil) { return ""; }
+
+  const parts = [ESC + "[?25l"];
+  if (previous == nil) {
+    // Nothing to compare against, which means this is the first frame or
+    // the terminal has just changed shape. Erase before drawing.
+    //
+    // A frame only covers the canvas, and after a terminal shrinks the
+    // canvas is smaller than the screen: without this, whatever the old
+    // wider frame left in the columns to the right of the new one stays
+    // there, because nothing will ever write over it. The reset comes
+    // first so that the erase uses the terminal's own background rather
+    // than whatever colour the last run happened to leave behind.
+    parts.push(ESC + "[0m" + ESC + "[2J");
+  }
+
+  // One cursor move per run, and a colour change only when the colour
+  // actually changes, which for a row of one style is a single sequence
+  // for the whole row.
+  let last = nil;
+  for (let [x, y, run_style, cells] in runs) {
+    parts.push(ESC + "[" + str(y + 1) + ";" + str(x + 1) + "H");
+    if (last == nil or !(last == run_style)) {
+      parts.push(style_sequence(run_style, depth));
+      last = run_style;
+    }
+    parts.push(cells.join(""));
+  }
+  parts.push(ESC + "[0m");
+  return parts.join("");
+}
+
 // ---- the backend itself ----
 
 class Terminal < Backend {
@@ -457,6 +497,9 @@ class Terminal < Backend {
     this.cursor_shown = false;
     this.cached = geom.Size(80, 24);
     this.lib = nil;
+    // True while the size above is a guess rather than something the
+    // terminal said. See measure().
+    this.guessed_size = false;
   }
 
   depth() { return this.color_depth; }
@@ -519,6 +562,7 @@ class Terminal < Backend {
   }
 
   measure() {
+    this.guessed_size = false;
     if (this.lib != nil) {
       const reported = this.lib["size"]();
       if (reported != nil) {
@@ -530,9 +574,15 @@ class Terminal < Backend {
         }
       }
     }
-    // A terminal that will not say how big it is; the environment
+    // A terminal that will not say how big it is. The environment
     // sometimes knows, and 80x24 is what everything assumed before any
     // of this existed.
+    //
+    // Either way the answer is a guess, which poll() remembers: a
+    // terminal that could not be measured sends no signal when the
+    // guess turns out to be wrong, so the only way to find out is to
+    // keep asking until it answers.
+    this.guessed_size = true;
     const columns = num(env("COLUMNS", "80"));
     const rows = num(env("LINES", "24"));
     if (columns == nil or rows == nil) { return geom.Size(80, 24); }
@@ -554,24 +604,12 @@ class Terminal < Backend {
       // again rather than write the difference between two shapes.
       this.previous = nil;
     }
-    const runs = surface.diff(this.previous);
-    if (runs.len() == 0 and this.previous != nil) {
+    const bytes = frame_bytes(surface, this.previous, this.color_depth);
+    if (bytes == "") {
       this.place_cursor(surface);
       return this;
     }
-
-    const parts = [ESC + "[?25l"];
-    let last = nil;
-    for (let [x, y, run_style, cells] in runs) {
-      parts.push(ESC + "[" + str(y + 1) + ";" + str(x + 1) + "H");
-      if (last == nil or !(last == run_style)) {
-        parts.push(style_sequence(run_style, this.color_depth));
-        last = run_style;
-      }
-      parts.push(cells.join(""));
-    }
-    parts.push(ESC + "[0m");
-    this.write(parts.join(""));
+    this.write(bytes);
     this.previous = surface.snapshot();
     this.place_cursor(surface);
     return this;
@@ -602,10 +640,16 @@ class Terminal < Backend {
 
     // A resize is noticed by a signal handler in the extension and
     // reported here, because the terminal does not send one.
-    if (this.lib["resized"]()) {
-      this.cached = this.measure();
-      this.previous = nil;
-      events.push(event.Resize(this.cached.width, this.cached.height));
+    //
+    // While the size is only a guess there is no signal to wait for, so
+    // it is asked for again every pass until the terminal answers.
+    if (this.lib["resized"]() or this.guessed_size) {
+      const now = this.measure();
+      if (now.width != this.cached.width or now.height != this.cached.height) {
+        this.cached = now;
+        this.previous = nil;
+        events.push(event.Resize(now.width, now.height));
+      }
     }
 
     const arrived = this.lib["read"](0);

@@ -221,22 +221,22 @@ window.every(0.15, fun () {
     progress.set_value(filled);
   });
 
-// The facts panel is filled in once the backend is known, since what it
-// has to say is about the backend.
+// The facts panel says what it is running on. Recomputed every frame
+// rather than once, because the size changes when the window does and a
+// readout that goes stale is worse than no readout.
 window.on_frame = fun (w) {
   const facts = w.find("facts");
-  if (facts != nil and facts.value == "") {
-    const size = w.screen.size();
-    facts.set_text(
-      "backend: ${w.screen.name}\n" +
-      "size: ${size.width} by ${size.height} cells\n" +
-      "colour: ${w.screen.depth()}\n" +
-      "mouse: ${w.screen.has_mouse()}\n" +
-      "theme: ${w.current_theme().name}\n\n" +
-      "Everything on the left is named in the theme rather than " +
-      "coloured in the widget, which is what lets the View menu " +
-      "recolour the whole program without a single widget knowing.");
-  }
+  if (facts == nil) { return; }
+  const size = w.screen.size();
+  facts.set_text(
+    "backend: ${w.screen.name}\n" +
+    "size: ${size.width} by ${size.height} cells\n" +
+    "colour: ${w.screen.depth()}\n" +
+    "mouse: ${w.screen.has_mouse()}\n" +
+    "theme: ${w.current_theme().name}\n\n" +
+    "Everything on the left is named in the theme rather than " +
+    "coloured in the widget, which is what lets the View menu " +
+    "recolour the whole program without a single widget knowing.");
 };
 
 window.on_close = fun (w) {
