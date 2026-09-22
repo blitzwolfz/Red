@@ -366,6 +366,12 @@ class Widget {
   // topmost widget under the pointer first.
   on_mouse_event(mouse, ui) { return false; }
 
+  // Can this widget take pasted text? Anything that answers true must
+  // have an insert() that takes a string. Asked rather than discovered,
+  // because a paste should reach a text field and stop at anything that
+  // merely happens to have a method of that name.
+  accepts_text() { return false; }
+
   // Called when the keyboard arrives and when it leaves.
   on_focus(ui) {
     this.invalidate();
@@ -396,6 +402,43 @@ class Widget {
     if (!this.enabled) { return nil; }
     return [this, x, y];
   }
+
+  // Where this widget is on the screen, rather than in its parent. Used
+  // for anything that has to be drawn outside its own frame: an open
+  // dropdown, a menu, a tooltip.
+  absolute_frame() {
+    let x = 0;
+    let y = 0;
+    let at = this;
+    while (at != nil) {
+      x += at.frame.x;
+      y += at.frame.y;
+      at = at.parent;
+    }
+    return Rect(x, y, this.frame.width, this.frame.height);
+  }
+
+  // ---- overlays ----
+  //
+  // A widget that has to draw outside its own frame — a dropdown's open
+  // list is the example — says so here, and the application draws it
+  // after everything else and routes the mouse to it first. Drawing it
+  // in place would put it underneath the frame of whatever contains it,
+  // and clip it to that frame, which is not what an open list is for.
+
+  has_overlay() { return false; }
+
+  // How big the overlay wants to be, in cells.
+  overlay_size() { return Size(0, 0); }
+
+  // Draws it. `rect` is where the application decided to put it, in
+  // screen coordinates, and the canvas is unframed, so this draws at
+  // absolute positions.
+  draw_overlay(surface, ui, rect) { return this; }
+
+  // A mouse event over the overlay. `mouse` is in screen coordinates
+  // and `rect` is where the overlay was drawn.
+  on_overlay_mouse(mouse, ui, rect) { return false; }
 
   // Everything below here that the keyboard can reach, in the order the
   // tab key should visit them: the order they were added, depth first.

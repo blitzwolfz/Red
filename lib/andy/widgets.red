@@ -1296,6 +1296,8 @@ class Input < Widget {
     return this;
   }
 
+  accepts_text() { return this.enabled; }
+
   // Replaces the selection, or inserts at the caret. Everything that
   // changes the text goes through here, so the length limit and the
   // acceptance test are checked in one place and cannot be forgotten.
@@ -1653,6 +1655,8 @@ class TextArea < Widget {
   }
 
   measure_content(available) { return Size(20, 5); }
+
+  accepts_text() { return this.enabled and !this.read_only; }
 
   insert(value) {
     if (this.read_only) { return this; }
@@ -2141,6 +2145,36 @@ class Select < Widget {
     return this;
   }
 
+  has_overlay() { return this.open and this.enabled; }
+
+  overlay_size() {
+    let widest = 0;
+    for (let option in this.options) {
+      widest = max(widest, text.width(this.label_of(option)));
+    }
+    return Size(max(this.frame.width, widest + 2), this.popup_height());
+  }
+
+  on_overlay_mouse(mouse, ui, rect) {
+    if (!mouse.is_press()) { return false; }
+    const inner = rect.shrunk(geom.uniform(1));
+    const index = mouse.y - inner.y + this.first_shown(inner.height);
+    if (index < 0 or index >= this.options.len()) { return true; }
+    this.highlight = index;
+    this.choose_highlighted();
+    return true;
+  }
+
+  // Which option is at the top of the open list, so that a highlight
+  // below the fold scrolls the list rather than falling off it.
+  first_shown(height) {
+    const count = min(height, this.options.len());
+    if (this.highlight >= count) { return this.highlight - count + 1; }
+    return 0;
+  }
+
+  draw_overlay(surface, ui, rect) { return this.draw_popup(surface, ui, rect); }
+
   // The open list, drawn by the application into an overlay so that it
   // sits above everything else.
   draw_popup(surface, ui, area) {
@@ -2149,8 +2183,7 @@ class Select < Widget {
     surface.box(area, ui.border(), ui.style("dialog.border"));
     const inner = area.shrunk(geom.uniform(1));
     const count = min(inner.height, this.options.len());
-    let first = 0;
-    if (this.highlight >= count) { first = this.highlight - count + 1; }
+    const first = this.first_shown(inner.height);
     for (let i in range(0, count)) {
       const index = first + i;
       if (index >= this.options.len()) { break; }
