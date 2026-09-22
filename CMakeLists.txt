@@ -104,6 +104,10 @@ set_target_properties(example_ext PROPERTIES C_STANDARD 11)
 # The native half of lib/crc32.red, in C++.
 red_add_extension(crc32_ext ffi/crc32_ext.cpp)
 
+# The native half of lib/andy/term.red: raw mode, the window size, and a
+# read that does not wait. POSIX only, like the rest of Red.
+red_add_extension(andy_ext ffi/andy_ext.cpp)
+
 enable_testing()
 
 # The runner is the interpreter itself, so `ctest` needs nothing beyond
