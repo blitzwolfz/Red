@@ -322,6 +322,16 @@ class Runtime {
                             bool share);
 
   std::vector<Obj*> grayStack_;
+  // Objects that belonged to threads which have since gone.
+  //
+  // A thread on its way out used to splice its list onto another
+  // thread's, which meant writing a list that thread was allocating onto
+  // at the time. They go here instead, under worldMutex_, and the sweep
+  // walks them like any other list. Nothing allocates onto this one, so
+  // there is no one to race with.
+  Obj* orphanedObjects_ = nullptr;
+  size_t orphanedBytes_ = 0;
+
   // Guards liveTasks_. Held only for the moment it takes to add or drop
   // an entry, and never while anything that can allocate runs, so the
   // collector can take it too.

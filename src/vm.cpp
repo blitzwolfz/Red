@@ -584,11 +584,15 @@ ObjUpvalue* VM::captureUpvalue(Value* local) {
   // lookup stops as soon as it passes the slot it wants.
   ObjUpvalue* previous = nullptr;
   ObjUpvalue* upvalue = openUpvalues_;
-  while (upvalue != nullptr && upvalue->location > local) {
+  while (upvalue != nullptr &&
+         upvalue->location.load(std::memory_order_relaxed) > local) {
     previous = upvalue;
     upvalue = upvalue->next;
   }
-  if (upvalue != nullptr && upvalue->location == local) return upvalue;
+  if (upvalue != nullptr &&
+      upvalue->location.load(std::memory_order_relaxed) == local) {
+    return upvalue;
+  }
 
   ObjUpvalue* created = runtime_.newUpvalue(local);
   created->next = upvalue;
@@ -601,10 +605,16 @@ ObjUpvalue* VM::captureUpvalue(Value* local) {
 }
 
 void VM::closeUpvalues(Value* last) {
-  while (openUpvalues_ != nullptr && openUpvalues_->location >= last) {
+  while (openUpvalues_ != nullptr &&
+         openUpvalues_->location.load(std::memory_order_relaxed) >= last) {
     ObjUpvalue* upvalue = openUpvalues_;
-    upvalue->closed = *upvalue->location;
-    upvalue->location = &upvalue->closed;
+    // The value moves first and the pointer to it second, with a release
+    // between them, so another task reading through this upvalue either
+    // sees the old slot, which is still there, or the new home together
+    // with what was put in it. Without that order it could see the new
+    // home before the value reached it.
+    upvalue->closed = *upvalue->location.load(std::memory_order_relaxed);
+    upvalue->location.store(&upvalue->closed, std::memory_order_release);
     openUpvalues_ = upvalue->next;
   }
 }
@@ -1072,10 +1082,12 @@ InterpretResult VM::runLoop(int baseFrame) {
       }
 
       case OP_GET_UPVALUE:
-        push(*frame->closure->upvalues[READ_BYTE()]->location);
+        push(*frame->closure->upvalues[READ_BYTE()]->location.load(
+            std::memory_order_acquire));
         break;
       case OP_SET_UPVALUE:
-        *frame->closure->upvalues[READ_BYTE()]->location = peek(0);
+        *frame->closure->upvalues[READ_BYTE()]->location.load(
+            std::memory_order_acquire) = peek(0);
         break;
 
       case OP_GET_PROPERTY: {

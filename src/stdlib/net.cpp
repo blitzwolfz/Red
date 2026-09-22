@@ -38,13 +38,51 @@ bool wouldBlock(int error) {
   return error == EAGAIN || error == EWOULDBLOCK || error == EINTR;
 }
 
+// How long to wait at a stretch when nothing else can tell us the
+// socket has been closed. Long enough not to matter, short enough that
+// closing a socket ends a wait on it promptly.
+constexpr double kClosePollSeconds = 0.1;
+
 // Waits for a descriptor with this task parked, so the collector never
-// has to wait on one that is doing nothing. Returns false on a timeout.
+// has to wait on one that is doing nothing. Returns false when the
+// socket was closed underneath us, or when the timeout ran out.
 bool waitOn(VM& vm, ObjSocket* socket, bool forWrite) {
-  vm.park();
-  bool ready = Scheduler::waitReady(socket->fd, forWrite, socket->timeout);
-  vm.unpark();
-  return ready;
+  // Under the scheduler, closing a socket wakes whatever is parked on
+  // it, so one wait is enough however long it lasts.
+  if (Scheduler::active()) {
+    vm.park();
+    bool ready = Scheduler::waitReady(
+        socket->fd.load(std::memory_order_acquire), forWrite,
+        socket->timeout);
+    vm.unpark();
+    return ready;
+  }
+
+  // Without it there is no poller to wake, and closing a descriptor does
+  // not end a poll(2) that another thread is already inside -- it simply
+  // waits on a descriptor number that now means nothing, or worse, means
+  // something else. So the wait is taken in slices, and the socket is
+  // looked at again between them. This is what lets a server started
+  // outside the scheduler still be stopped by closing its socket.
+  double remaining = socket->timeout;
+  for (;;) {
+    if (socket->closed.load(std::memory_order_acquire)) return false;
+    int fd = socket->fd.load(std::memory_order_acquire);
+    if (fd < 0) return false;
+
+    double slice = kClosePollSeconds;
+    if (socket->timeout > 0 && remaining < slice) slice = remaining;
+
+    vm.park();
+    bool ready = Scheduler::waitReady(fd, forWrite, slice);
+    vm.unpark();
+    if (ready) return true;
+
+    if (socket->timeout > 0) {
+      remaining -= slice;
+      if (remaining <= 0) return false;
+    }
+  }
 }
 
 Value nativeTcpListen(VM& vm, int argCount, Value* args) {
@@ -172,7 +210,8 @@ Value nativeTcpConnect(VM& vm, int argCount, Value* args) {
 }
 
 bool requireOpenSocket(VM& vm, ObjSocket* socket, const char* who) {
-  if (socket->closed || socket->fd < 0) {
+  if (socket->closed.load(std::memory_order_acquire) ||
+      socket->fd.load(std::memory_order_acquire) < 0) {
     vm.failAs("net", "%s on a closed socket.", who);
     return false;
   }
@@ -187,7 +226,8 @@ Value socketAccept(VM& vm, int, Value* args) {
   }
 
   for (;;) {
-    int client = ::accept(server->fd, nullptr, nullptr);
+    int client = ::accept(server->fd.load(std::memory_order_acquire), nullptr,
+                          nullptr);
     if (client >= 0) {
       makeNonBlocking(client);
       // Small writes go out at once rather than waiting for more to
@@ -207,7 +247,8 @@ Value socketAccept(VM& vm, int, Value* args) {
     // Nothing waiting. Park this fiber until the listening socket has a
     // connection on it; the worker takes up something else meanwhile.
     if (!waitOn(vm, server, false)) {
-      if (server->closed || server->fd < 0) {
+      if (server->closed.load(std::memory_order_acquire) ||
+          server->fd.load(std::memory_order_acquire) < 0) {
         return vm.failAs("net", "accept() on a closed socket.");
       }
       return vm.failAs("timeout", "accept() timed out.");
@@ -230,7 +271,8 @@ Value socketRead(VM& vm, int argCount, Value* args) {
   std::string buffer;
   buffer.resize(limit);
   for (;;) {
-    ssize_t got = ::recv(socket->fd, &buffer[0], limit, 0);
+    ssize_t got = ::recv(socket->fd.load(std::memory_order_acquire),
+                         &buffer[0], limit, 0);
     if (got > 0) {
       return objValue((Obj*)vm.runtime().copyString(buffer.data(), (size_t)got));
     }
@@ -258,7 +300,8 @@ Value socketWrite(VM& vm, int argCount, Value* args) {
   size_t sent = 0;
   while (sent < text.size()) {
     ssize_t wrote =
-        ::send(socket->fd, text.data() + sent, text.size() - sent, 0);
+        ::send(socket->fd.load(std::memory_order_acquire), text.data() + sent,
+               text.size() - sent, 0);
     if (wrote > 0) {
       sent += (size_t)wrote;
       continue;
@@ -277,22 +320,29 @@ Value socketWrite(VM& vm, int argCount, Value* args) {
 
 Value socketClose(VM&, int, Value* args) {
   ObjSocket* socket = asSocket(args[0]);
-  if (!socket->closed && socket->fd >= 0) {
-    // Whoever is parked on this descriptor has to be let go before it
-    // goes away: closing it takes it out of the poller without a word,
-    // and a task waiting for a readiness that can now never arrive would
-    // wait forever. This is what ends an accept loop when its listening
-    // socket is closed.
-    socket->closed = true;
-    Scheduler::wakeOnClose(socket->fd);
-    ::close(socket->fd);
-    socket->fd = -1;
+  // Exactly one caller closes the descriptor, however many ask at once.
+  // A server shutting down and a task still reading the same socket are
+  // two callers, and closing a descriptor twice can close something
+  // else that has since been given the same number.
+  if (socket->closed.exchange(true, std::memory_order_acq_rel)) {
+    return nilValue();
   }
+  int fd = socket->fd.exchange(-1, std::memory_order_acq_rel);
+  if (fd < 0) return nilValue();
+
+  // Whoever is parked on this descriptor has to be let go before it goes
+  // away: closing it takes it out of the poller without a word, and a
+  // task waiting for a readiness that can now never arrive would wait
+  // forever. This is what ends an accept loop when its listening socket
+  // is closed.
+  Scheduler::wakeOnClose(fd);
+  ::close(fd);
   return nilValue();
 }
 
 Value socketFd(VM&, int, Value* args) {
-  return numberValue((double)asSocket(args[0])->fd);
+  return numberValue(
+      (double)asSocket(args[0])->fd.load(std::memory_order_acquire));
 }
 
 // How long this socket's calls may wait. Zero, the default, means as
@@ -311,7 +361,8 @@ Value socketTimeout(VM&, int, Value* args) {
 
 Value socketIsClosed(VM&, int, Value* args) {
   ObjSocket* socket = asSocket(args[0]);
-  return boolValue(socket->closed || socket->fd < 0);
+  return boolValue(socket->closed.load(std::memory_order_acquire) ||
+                   socket->fd.load(std::memory_order_acquire) < 0);
 }
 
 // The port this socket is actually bound to. Listening on port 0 asks the
@@ -322,7 +373,8 @@ Value socketPort(VM& vm, int, Value* args) {
 
   struct sockaddr_in address;
   socklen_t length = sizeof(address);
-  if (::getsockname(socket->fd, (struct sockaddr*)&address, &length) < 0) {
+  if (::getsockname(socket->fd.load(std::memory_order_acquire),
+                    (struct sockaddr*)&address, &length) < 0) {
     return vm.failAs("net", "port() failed: %s", std::strerror(errno));
   }
   return numberValue((double)ntohs(address.sin_port));
@@ -336,7 +388,8 @@ Value socketPeer(VM& vm, int, Value* args) {
 
   struct sockaddr_in address;
   socklen_t length = sizeof(address);
-  if (::getpeername(socket->fd, (struct sockaddr*)&address, &length) < 0) {
+  if (::getpeername(socket->fd.load(std::memory_order_acquire),
+                    (struct sockaddr*)&address, &length) < 0) {
     return objValue((Obj*)vm.runtime().copyString("", 0));
   }
   char text[INET_ADDRSTRLEN];

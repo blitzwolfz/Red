@@ -146,21 +146,19 @@ void Runtime::detachThread(Thread* thread) {
     size_t i = thread->index;
     {
     thread->vm = nullptr;
-    // What this thread allocated outlives it, so the objects move to
-    // the thread that is left rather than being freed or orphaned.
-    if (thread->objects != nullptr && !threads_.empty()) {
-      Thread* keeper = threads_[0] == thread
-                           ? (threads_.size() > 1 ? threads_[1] : nullptr)
-                           : threads_[0];
-      if (keeper != nullptr) {
-        Obj* last = thread->objects;
-        while (last->next != nullptr) last = last->next;
-        last->next = keeper->objects;
-        keeper->objects = thread->objects;
-        keeper->bytesAllocated += thread->bytesAllocated;
-        thread->objects = nullptr;
-        thread->bytesAllocated = 0;
-      }
+    // What this thread allocated outlives it, so the objects are kept
+    // rather than freed. They go on the runtime's own list, not onto
+    // another thread's: that thread may be allocating onto its list at
+    // this very moment, and this is running under worldMutex_ rather
+    // than with the world stopped.
+    if (thread->objects != nullptr) {
+      Obj* last = thread->objects;
+      while (last->next != nullptr) last = last->next;
+      last->next = orphanedObjects_;
+      orphanedObjects_ = thread->objects;
+      orphanedBytes_ += thread->bytesAllocated;
+      thread->objects = nullptr;
+      thread->bytesAllocated = 0;
     }
     }
     // Swapped with the last entry rather than erased from the middle.
@@ -335,6 +333,16 @@ Runtime::~Runtime() {
     }
     thread->objects = nullptr;
   }
+  // The orphans belong to nobody, so nothing else will free them.
+  {
+    Obj* object = orphanedObjects_;
+    while (object != nullptr) {
+      Obj* next = object->next;
+      freeObject(object);
+      object = next;
+    }
+    orphanedObjects_ = nullptr;
+  }
   detachThread(mainThread_);
   delete mainThread_;
 }
@@ -491,7 +499,7 @@ ObjClosure* Runtime::newClosure(ObjFunction* function) {
 
 ObjUpvalue* Runtime::newUpvalue(Value* slot) {
   ObjUpvalue* upvalue = NEW_OBJECT(ObjUpvalue, Upvalue);
-  upvalue->location = slot;
+  upvalue->location.store(slot, std::memory_order_relaxed);
   upvalue->closed = nilValue();
   upvalue->next = nullptr;
   return upvalue;
@@ -598,9 +606,9 @@ ObjFile* Runtime::newFile(FILE* handle, ObjString* path) {
 
 ObjSocket* Runtime::newSocket(int fd, bool listening) {
   ObjSocket* socket = NEW_OBJECT(ObjSocket, Socket);
-  socket->fd = fd;
+  socket->fd.store(fd, std::memory_order_relaxed);
   socket->listening = listening;
-  socket->closed = false;
+  socket->closed.store(false, std::memory_order_relaxed);
   socket->timeout = 0;
   return socket;
 }
@@ -984,7 +992,11 @@ size_t Runtime::freeObject(Obj* obj) {
     }
     case ObjType::Socket: {
       ObjSocket* socket = (ObjSocket*)obj;
-      if (!socket->closed && socket->fd >= 0) ::close(socket->fd);
+      // Nothing else refers to it, so nothing else can be closing it.
+      int fd = socket->fd.load(std::memory_order_relaxed);
+      if (!socket->closed.load(std::memory_order_relaxed) && fd >= 0) {
+        ::close(fd);
+      }
       freed += sizeof(ObjSocket);
       delete socket;
       break;
@@ -1041,6 +1053,33 @@ void Runtime::sweep() {
     thread->bytesAllocated = kept;
     thread->sinceRollup = 0;
     live += kept;
+  }
+
+  // And what threads that have gone left behind. Safe to touch without
+  // worldMutex_ for the same reason the lists above are: a thread that
+  // wants to add to this one waits for the collection to finish first.
+  {
+    Obj* previous = nullptr;
+    Obj* object = orphanedObjects_;
+    size_t freed = 0;
+    while (object != nullptr) {
+      if (object->isMarked) {
+        object->isMarked = false;
+        previous = object;
+        object = object->next;
+      } else {
+        Obj* unreached = object;
+        object = object->next;
+        if (previous != nullptr) {
+          previous->next = object;
+        } else {
+          orphanedObjects_ = object;
+        }
+        freed += freeObject(unreached);
+      }
+    }
+    orphanedBytes_ -= freed;
+    live += orphanedBytes_;
   }
   bytesAllocated.store(live, std::memory_order_relaxed);
 }

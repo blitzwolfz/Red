@@ -189,7 +189,16 @@ struct ObjNative {
 
 struct ObjUpvalue {
   Obj obj;
-  Value* location;
+  // Where the captured variable lives: a slot on the stack of the task
+  // that made the closure, until that slot dies and the value moves into
+  // `closed` below.
+  //
+  // Atomic because a closure can be handed to another task, which then
+  // reads the variable through this while the task that made it is
+  // moving the variable off its stack. The move publishes `closed` and
+  // then this pointer, so a reader that sees the new pointer sees the
+  // value that went with it.
+  std::atomic<Value*> location;
   Value closed;
   ObjUpvalue* next;
 };
@@ -305,9 +314,13 @@ struct ObjFile {
 
 struct ObjSocket {
   Obj obj;
-  int fd;
+  // Atomic because a socket is reachable from more than one task, and
+  // closing one is something a task does to a socket another task is
+  // reading. The close itself is a pair of exchanges, so exactly one
+  // caller closes the descriptor however many ask.
+  std::atomic<int> fd;
   bool listening;
-  bool closed;
+  std::atomic<bool> closed;
   // How long a read, a write, an accept or a connect may wait before
   // giving up. Zero means forever, which is the default.
   double timeout;
