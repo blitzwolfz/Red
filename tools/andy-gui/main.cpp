@@ -32,15 +32,27 @@
 //   pline <x> <y> <x2> <y2> <stroke> <fg>
 //   ptext <x> <y> <size> <fg> <attr> <text>
 //   pcursor <x> <y> <w> <h> <fg>
+//   pimage <x> <y> <w> <h> <path>
+//   pmin <w> <h>
 //   pixel_end
 //
-// Colours are decimal 0xRRGGBB, or -1 for the window's own. `text` runs
-// to the end of the line and is the only field that may contain spaces.
+// Colours are decimal 0xRRGGBB, or -1 for the window's own. `text` and
+// `path` run to the end of the line and are the only fields that may
+// contain spaces. Text attribute 128 selects the monospaced font. An image
+// is scaled down to fit its rectangle, keeping its shape, and centred.
+//
+// The first pixel scene sizes the window, within the screen. After that
+// the size is the user's: every change is reported as `psize`, in pixels,
+// and a program that wants to fill the window draws its next scene at
+// that size. Resizing the window to each scene's size instead would fight
+// a drag, because frames arrive behind the pointer. `pmin` sets how small
+// the user may make it.
 //
 // Up, to andy:
 //
 //   ready <cols> <rows>
 //   size <cols> <rows>
+//   psize <width> <height>
 //   key <name> <ctrl> <alt> <shift> <text>
 //   mouse <action> <x> <y> <button> <wheel> <ctrl> <alt> <shift>
 //   focus <0|1>
@@ -350,6 +362,9 @@ int main(int argc, char** argv) {
   andy::Grid grid;
   andy::Grid building;
   andy::PixelScene pixel_scene;
+  bool window_sized = false;
+  int pixel_width = 0;
+  int pixel_height = 0;
   grid.resize(cols, rows);
   building.resize(cols, rows);
 
@@ -374,8 +389,17 @@ int main(int argc, char** argv) {
         pixel_scene.width = static_cast<float>(to_double(field(line, &at)));
         pixel_scene.height = static_cast<float>(to_double(field(line, &at)));
         pixel_scene.commands.clear();
-        host->set_pixel_size(static_cast<int>(pixel_scene.width),
-                             static_cast<int>(pixel_scene.height));
+        if (!window_sized) {
+          host->set_pixel_size(static_cast<int>(pixel_scene.width),
+                               static_cast<int>(pixel_scene.height));
+          window_sized = true;
+        }
+        continue;
+      }
+      if (word == "pmin") {
+        int w = static_cast<int>(to_long(field(line, &at)));
+        int h = static_cast<int>(to_long(field(line, &at)));
+        host->set_pixel_min(w, h);
         continue;
       }
       if (word == "pfill") {
@@ -435,6 +459,17 @@ int main(int argc, char** argv) {
         command.width = static_cast<float>(to_double(field(line, &at)));
         command.height = static_cast<float>(to_double(field(line, &at)));
         command.foreground = to_color(field(line, &at));
+        pixel_scene.commands.push_back(command);
+        continue;
+      }
+      if (word == "pimage") {
+        andy::PixelCommand command;
+        command.kind = andy::kImage;
+        command.x = static_cast<float>(to_double(field(line, &at)));
+        command.y = static_cast<float>(to_double(field(line, &at)));
+        command.width = static_cast<float>(to_double(field(line, &at)));
+        command.height = static_cast<float>(to_double(field(line, &at)));
+        command.text = rest_of(line, at);
         pixel_scene.commands.push_back(command);
         continue;
       }
@@ -543,6 +578,16 @@ int main(int argc, char** argv) {
       building.resize(cols, rows);
       events.push_back("size " + std::to_string(cols) + " " +
                        std::to_string(rows));
+    }
+    int now_width = 0;
+    int now_height = 0;
+    host->pixel_size(&now_width, &now_height);
+    if (now_width > 0 && now_height > 0 &&
+        (now_width != pixel_width || now_height != pixel_height)) {
+      pixel_width = now_width;
+      pixel_height = now_height;
+      events.push_back("psize " + std::to_string(pixel_width) + " " +
+                       std::to_string(pixel_height));
     }
     for (size_t i = 0; i < events.size(); i++) {
       if (!link.write_line(events[i])) {

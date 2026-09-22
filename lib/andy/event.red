@@ -122,10 +122,13 @@ class Mouse {
 
 // The screen changed shape. Sizes are in cells.
 class Resize {
-  init(width, height) {
+  // `pixels` is true when the size is a native window's drawable area in
+  // pixels rather than a count of cells.
+  init(width, height, pixels = false) {
     this.kind = Kind.Resize;
     this.width = width;
     this.height = height;
+    this.pixels = pixels;
     this.handled = false;
   }
 

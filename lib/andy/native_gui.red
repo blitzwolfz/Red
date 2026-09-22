@@ -9,6 +9,10 @@
 import "andy/color" as color;
 import "andy/style" as style;
 
+// Text attribute for the monospaced system font. Pixel scenes only; it
+// sits beside the style attributes and is ignored by the terminal.
+const MONO = 128;
+
 fun packed(value) {
   if (value == nil) { return "-1"; }
   const n = value.packed();
@@ -58,6 +62,14 @@ class Scene {
     this.commands.push("ptext " + str(x) + " " + str(y) + " " + str(size) +
                        " " + packed(foreground) + " " + str(attrs) + " " +
                        clean(value));
+    return this;
+  }
+
+  // An image file, scaled down to fit the rectangle with its shape kept,
+  // and centred in it. The window decodes the file itself.
+  image(x, y, width, height, file) {
+    this.commands.push("pimage " + str(x) + " " + str(y) + " " +
+                       str(width) + " " + str(height) + " " + clean(file));
     return this;
   }
 

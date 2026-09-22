@@ -30,6 +30,8 @@ enum Attr : uint8_t {
   kBlink = 16,
   kReverse = 32,
   kStrike = 64,
+  // Pixel scenes only: draw the text in the monospaced system font.
+  kMono = 128,
 };
 
 // A pixel scene is the native renderer's input. It deliberately has no
@@ -42,6 +44,8 @@ enum PixelCommandKind : uint8_t {
   kLine = 2,
   kText = 3,
   kCursor = 4,
+  // `text` holds a file path; the image is fitted inside the rectangle.
+  kImage = 5,
 };
 
 struct PixelCommand {
@@ -90,6 +94,19 @@ class Host {
   // Requests the native surface size for a pixel scene. The compatibility
   // cell path never calls this; a real GUI can choose its own dimensions.
   virtual void set_pixel_size(int width, int height) {
+    (void)width;
+    (void)height;
+  }
+
+  // The drawable area in pixels, so a pixel scene can be laid out to fill
+  // it. Zero when the host cannot tell.
+  virtual void pixel_size(int* width, int* height) {
+    *width = 0;
+    *height = 0;
+  }
+
+  // The smallest drawable area the user may resize the window to.
+  virtual void set_pixel_min(int width, int height) {
     (void)width;
     (void)height;
   }

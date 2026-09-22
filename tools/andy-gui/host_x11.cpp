@@ -124,6 +124,23 @@ class X11Host : public Host {
     XFlush(display_);
   }
 
+  void pixel_size(int* width, int* height) override {
+    *width = static_cast<int>(pixmap_width_);
+    *height = static_cast<int>(pixmap_height_);
+  }
+
+  void set_pixel_min(int width, int height) override {
+    if (display_ == nullptr || width <= 0 || height <= 0) return;
+    XSizeHints* hints = XAllocSizeHints();
+    if (hints == nullptr) return;
+    hints->flags = PMinSize;
+    hints->min_width = width;
+    hints->min_height = height;
+    XSetWMNormalHints(display_, window_, hints);
+    XFree(hints);
+    XFlush(display_);
+  }
+
   bool pump(std::vector<std::string>* out, int wait_ms) override {
     if (display_ == nullptr) return false;
 
@@ -413,6 +430,11 @@ class X11Host : public Host {
           XSetForeground(display_, gc_, pixel_for(command.foreground == kDefaultColor
                                                        ? kDefaultFg : command.foreground));
           XFillRectangle(display_, pixmap_, gc_, x, bottom, width, height);
+          break;
+        case kImage:
+          // Core X11 has no image decoder; the space is outlined instead.
+          XSetForeground(display_, gc_, pixel_for(kDefaultFg));
+          XDrawRectangle(display_, pixmap_, gc_, x, bottom, width - 1, height - 1);
           break;
       }
     }

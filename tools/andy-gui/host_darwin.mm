@@ -45,6 +45,9 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
 @property(nonatomic, strong) NSFont* italicFont;
 @property(nonatomic, strong) NSMutableArray<NSString*>* events;
 @property(nonatomic, assign) BOOL closed;
+// Pixel scenes ask for the same few fonts and images every frame.
+@property(nonatomic, strong) NSMutableDictionary<NSString*, NSFont*>* sceneFonts;
+@property(nonatomic, strong) NSMutableDictionary<NSString*, id>* sceneImages;
 @end
 
 @implementation AndyView
@@ -54,6 +57,8 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
   if (self == nil) return nil;
   _events = [NSMutableArray array];
   _closed = NO;
+  _sceneFonts = [NSMutableDictionary dictionary];
+  _sceneImages = [NSMutableDictionary dictionary];
 
   CGFloat size = 13.0;
   NSString* wanted = [[NSProcessInfo processInfo] environment][@"ANDY_FONT_SIZE"];
@@ -94,6 +99,39 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
   [self.events addObject:line];
 }
 
+- (NSFont*)sceneFontOfSize:(CGFloat)size attr:(uint8_t)attr {
+  const BOOL bold = (attr & andy::kBold) != 0;
+  const BOOL mono = (attr & andy::kMono) != 0;
+  NSString* key = [NSString stringWithFormat:@"%.2f %d %d", size, bold, mono];
+  NSFont* font = self.sceneFonts[key];
+  if (font != nil) return font;
+  NSFontWeight weight = bold ? NSFontWeightBold : NSFontWeightRegular;
+  if (mono) {
+    if (@available(macOS 10.15, *)) {
+      font = [NSFont monospacedSystemFontOfSize:size weight:weight];
+    }
+    if (font == nil) font = [NSFont userFixedPitchFontOfSize:size];
+  }
+  if (font == nil) {
+    font = bold ? [NSFont boldSystemFontOfSize:size] : [NSFont systemFontOfSize:size];
+  }
+  self.sceneFonts[key] = font;
+  return font;
+}
+
+// Decoded once per path. A file that cannot be read is remembered as
+// missing too, so a broken image does not cost a disk read every frame.
+- (NSImage*)sceneImageAt:(const std::string&)path {
+  NSString* key = [NSString stringWithUTF8String:path.c_str()];
+  if (key == nil) return nil;
+  id cached = self.sceneImages[key];
+  if (cached != nil) return cached == [NSNull null] ? nil : cached;
+  if ([self.sceneImages count] > 32) [self.sceneImages removeAllObjects];
+  NSImage* image = [[NSImage alloc] initWithContentsOfFile:key];
+  self.sceneImages[key] = image != nil ? image : (id)[NSNull null];
+  return image;
+}
+
 - (void)drawPixelScene:(andy::PixelScene*)scene inBounds:(NSRect)bounds {
   for (const andy::PixelCommand& command : scene->commands) {
     CGFloat y = bounds.size.height - command.y - command.height;
@@ -132,10 +170,7 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
       }
       case andy::kText: {
         CGFloat size = command.height > 0 ? command.height : 14.0;
-        NSFont* font = [NSFont systemFontOfSize:size];
-        if ((command.attr & andy::kBold) != 0) {
-          font = [NSFont boldSystemFontOfSize:size];
-        }
+        NSFont* font = [self sceneFontOfSize:size attr:command.attr];
         NSMutableDictionary* attributes = [NSMutableDictionary dictionary];
         attributes[NSFontAttributeName] = font;
         attributes[NSForegroundColorAttributeName] =
@@ -152,6 +187,25 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
         [value drawAtPoint:NSMakePoint(command.x,
                                        bounds.size.height - command.y - size)
              withAttributes:attributes];
+        break;
+      }
+      case andy::kImage: {
+        NSImage* image = [self sceneImageAt:command.text];
+        if (image == nil) break;
+        NSSize natural = [image size];
+        if (natural.width <= 0 || natural.height <= 0) break;
+        CGFloat scale = MIN(1.0, MIN(command.width / natural.width,
+                                     command.height / natural.height));
+        CGFloat w = floor(natural.width * scale);
+        CGFloat h = floor(natural.height * scale);
+        NSRect box = NSMakeRect(command.x + floor((command.width - w) / 2),
+                                y + floor((command.height - h) / 2), w, h);
+        [image drawInRect:box
+                 fromRect:NSZeroRect
+                operation:NSCompositingOperationSourceOver
+                 fraction:1.0
+           respectFlipped:YES
+                    hints:@{NSImageHintInterpolation : @(NSImageInterpolationHigh)}];
         break;
       }
       case andy::kCursor: {
@@ -537,7 +591,32 @@ class CocoaHost : public Host {
   void set_pixel_size(int width, int height) override {
     if (window_ == nil || width <= 0 || height <= 0) return;
     @autoreleasepool {
-      [window_ setContentSize:NSMakeSize(width, height)];
+      // Asked-for sizes are kept within the screen, less the menu bar,
+      // the Dock and the window's own title bar.
+      NSSize size = NSMakeSize(width, height);
+      NSScreen* screen = [window_ screen] != nil ? [window_ screen] : [NSScreen mainScreen];
+      if (screen != nil) {
+        NSRect usable = [window_ contentRectForFrameRect:[screen visibleFrame]];
+        size.width = MIN(size.width, floor(usable.size.width));
+        size.height = MIN(size.height, floor(usable.size.height));
+      }
+      [window_ setContentSize:size];
+      [window_ center];
+    }
+  }
+
+  void pixel_size(int* width, int* height) override {
+    @autoreleasepool {
+      NSRect bounds = [view_ bounds];
+      *width = (int)floor(bounds.size.width);
+      *height = (int)floor(bounds.size.height);
+    }
+  }
+
+  void set_pixel_min(int width, int height) override {
+    if (window_ == nil || width <= 0 || height <= 0) return;
+    @autoreleasepool {
+      [window_ setContentMinSize:NSMakeSize(width, height)];
     }
   }
 

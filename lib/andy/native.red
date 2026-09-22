@@ -94,6 +94,7 @@ class Window < Backend {
     this.buffer = "";
     this.cached = geom.Size(this.want_cols, this.want_rows);
     this.previous = nil;
+    this.pixels = nil;
     this.closed = false;
     // How long to wait for the window to appear before giving up. A
     // window system that is busy can take a moment; one that is not
@@ -261,6 +262,9 @@ class Window < Backend {
 
   size() { return this.cached; }
 
+  // The drawable area in pixels, once the window has reported it, else nil.
+  pixel_size() { return this.pixels; }
+
   // Sends the runs that differ from the last frame, the same comparison
   // the terminal backend makes and for the same reason: a frame is a few
   // hundred bytes when a caret moved and a few thousand when the whole
@@ -377,6 +381,11 @@ class Window < Backend {
                            number_at(fields, 7, 0) != 0,
                            number_at(fields, 8, 0) != 0);
       }
+      case "psize": {
+        this.pixels = geom.Size(floor(number_at(fields, 1, 0)),
+                                floor(number_at(fields, 2, 0)));
+        return event.Resize(this.pixels.width, this.pixels.height, true);
+      }
       case "focus": return event.Focus(number_at(fields, 1, 0) != 0);
       case "close": return event.Close();
     }
@@ -389,6 +398,13 @@ class Window < Backend {
     // not sent at all, which is the lesser of the two disappointments.
     this.send("clip " + value.replace("\n", " "));
     return true;
+  }
+
+  // The smallest the user may make the window, in pixels, for a program
+  // that lays its pixel scenes out to fill it.
+  set_pixel_min(width, height) {
+    this.send("pmin " + str(floor(width)) + " " + str(floor(height)));
+    return this;
   }
 
   set_title(value) {
