@@ -32,6 +32,13 @@ struct Entry {
   Value value;
 };
 
+// Told to ThreadSanitizer, and nothing at all otherwise. Defined in
+// table.cpp. They say that everything a writer did before releasing a
+// table happened before a reader that saw its version, which is the
+// part of a seqlock the instrumentation cannot work out for itself.
+void tableReleased(const void* table);
+void tableAcquired(const void* table);
+
 class Table {
  public:
   Table() = default;
@@ -76,6 +83,19 @@ class Table {
 
   void adjustCapacity(int capacity);
 
+  // The speculative half of a parallel read: everything between the two
+  // version checks. Kept in one place, and out of ThreadSanitizer's
+  // sight, because it deliberately reads memory a writer may be changing
+  // underneath it and throws the answer away when the version says it
+  // did. That is what a seqlock is, and it is not something TSAN has any
+  // way to tell from a mistake.
+  //
+  // What TSAN can still see is the happens-before the version counter
+  // establishes, which is announced explicitly. So a race on a value
+  // stored in a table -- two tasks writing the same array -- is still
+  // caught; only the table's own reads are exempt.
+  bool probe(ObjString* key, Value* out) const;
+
   // Marks the table as being written for as long as the guard lives.
   // Does nothing at all until a second thread exists.
   class Writing {
@@ -89,6 +109,10 @@ class Table {
     }
     ~Writing() {
       if (!held_) return;
+      // Announced so that a reader which sees this version acquires
+      // everything written under it, whatever the instrumentation can
+      // see of the reads themselves.
+      tableReleased(&table_);
       table_.version_.fetch_add(1, std::memory_order_release);
       table_.writing_.clear(std::memory_order_release);
     }

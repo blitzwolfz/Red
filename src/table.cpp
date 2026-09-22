@@ -24,6 +24,23 @@ Table::~Table() { delete[] entries_; }
 // both intern those whatever their length. Table::set() checks that in a
 // debug build. Maps written by a program use ValueMap below, which
 // compares contents.
+// Not instrumented: a parallel probe reads entries a writer may be
+// moving, checks the version afterwards, and runs again when it was.
+// See Table::probe.
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define RED_SEQLOCK_READ __attribute__((no_sanitize("thread")))
+extern "C" {
+void __tsan_acquire(void* address);
+void __tsan_release(void* address);
+}
+#endif
+#endif
+#if !defined(RED_SEQLOCK_READ)
+#define RED_SEQLOCK_READ
+#endif
+
+RED_SEQLOCK_READ
 static Entry* findEntry(Entry* entries, int capacity, ObjString* key) {
   uint32_t index = key->hash & (uint32_t)(capacity - 1);
   Entry* tombstone = nullptr;
@@ -96,26 +113,48 @@ bool Table::get(ObjString* key, Value* out) const {
     // Odd means a writer is inside the table right now.
     if ((before & 1) != 0) continue;
 
-    Entry* entries = entries_;
-    int capacity = capacity_;
-    // The array and its size have to come from the same moment, or the
-    // probe could run off the end of one with the size of the other.
-    if (version_.load(std::memory_order_acquire) != before) continue;
-    if (capacity == 0) return false;
-
-    Entry* entry = findEntry(entries, capacity, key);
-    bool found = entry->key != nullptr;
-    Value value = entry->value;
-    // Only now is what was read known to be a value that was really
-    // there. Anything read from a table a writer was moving is thrown
-    // away and the probe runs again.
+    Value value = nilValue();
+    bool found = probe(key, &value);
+    // Only now is what was read known to have been really there.
+    // Anything read from a table a writer was moving is thrown away and
+    // the probe runs again.
     std::atomic_thread_fence(std::memory_order_acquire);
     if (version_.load(std::memory_order_relaxed) != before) continue;
 
+    // The version held, so everything the last writer did happened
+    // before this read.
+    tableAcquired(this);
     if (!found) return false;
     *out = value;
     return true;
   }
+}
+
+RED_SEQLOCK_READ
+bool Table::probe(ObjString* key, Value* out) const {
+  Entry* entries = entries_;
+  int capacity = capacity_;
+  if (capacity == 0) return false;
+  Entry* entry = findEntry(entries, capacity, key);
+  if (entry->key == nullptr) return false;
+  *out = entry->value;
+  return true;
+}
+
+void tableReleased(const void* table) {
+#if defined(__has_feature) && __has_feature(thread_sanitizer)
+  __tsan_release(const_cast<void*>(table));
+#else
+  (void)table;
+#endif
+}
+
+void tableAcquired(const void* table) {
+#if defined(__has_feature) && __has_feature(thread_sanitizer)
+  __tsan_acquire(const_cast<void*>(table));
+#else
+  (void)table;
+#endif
 }
 
 bool Table::set(ObjString* key, Value value) {
