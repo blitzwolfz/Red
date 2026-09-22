@@ -3,7 +3,10 @@
 The libraries that ship with Red. They are found automatically: this
 directory is on the library search path whenever `red` is run from
 `build/` or installed beside it. The `.red` suffix is optional in an
-import.
+import. `red build` includes all the shipped Red libraries in the standalone
+executable, so they remain available without this directory on the
+destination machine. Pass `--no-stdlib` to omit unused shipped modules;
+libraries imported by the program are still bundled.
 
 ## std
 

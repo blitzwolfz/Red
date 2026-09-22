@@ -337,12 +337,15 @@ entry             varint, an index into the table
 ```
 
 The build follows `IMPORT` instructions through the compiled tree,
-resolving each the way the VM would, and compiles what it finds, until
-nothing new turns up. The paths are the build machine's and mean nothing
-on another, which is why each module carries its own links: an import
-inside a built program is answered by looking up the spelling that was
-written, so the file system is never consulted and the sources can be
-deleted.
+resolving each the way the VM would, and compiles what it finds. It also
+includes every Red source library shipped beside the interpreter, including
+`andy` and the modules under `std`, so they remain available to imports in
+the standalone executable. Pass `--no-stdlib` to omit unused shipped
+libraries; modules the program imports are still included. The paths are
+the build machine's and mean nothing on another, which is why each module
+carries its own links: an import inside a built program is answered by
+looking up the spelling that was written, so the file system is never
+consulted and the sources can be deleted.
 
 Two things stay outside. A native extension is a shared library the
 operating system loads from a real path, so a program using one still

@@ -721,20 +721,19 @@ going to someone who does not have Red:
 
 ```bash
 $ red build logstat.red -o logstat
-logstat.red -> logstat (567098 bytes, 8650 of them program, 3 modules)
 $ ./logstat access.log
 ```
 
-`red build` copies the interpreter, appends the compiled program and
-every module it imports, and marks the result executable. The file that
-comes out needs nothing else on the machine: no Red, no `RED_PATH`, no
-library directory. Copy it and run it.
+`red build` copies the interpreter, appends the compiled program, every
+module it imports, and all Red libraries shipped with the interpreter. That
+includes `andy`, `std`, and the other libraries in `lib`. The file that
+comes out needs no Red installation, `RED_PATH`, or library directory on
+the destination machine. Copy it and run it. Pass `--no-stdlib` to omit
+unused shipped library modules; imported modules are still bundled.
 
-The size is almost all interpreter, so it is close to the same half
-megabyte whether the program is five lines or five thousand. An import
-inside a built program is answered from inside the file, under the paths
-the build recorded, so the sources can be deleted afterwards and it
-still runs.
+An import inside a built program is answered from inside the executable,
+under the paths the build recorded, so the source and library files can be
+deleted afterwards and it still runs.
 
 Two things it does not carry. A native extension is a `.so` that the
 operating system has to load from a real path, so a program using one

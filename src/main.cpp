@@ -47,7 +47,8 @@ void printUsage() {
       "  red <program> [args...]      run a program, source or compiled\n"
       "  red run <program> [args]     same, stated explicitly\n"
       "  red compile <in.red> [-o f]  compile ahead of time to a .redc file\n"
-      "  red build <in.red> [-o name] write a standalone executable\n"
+      "  red build <in.red> [-o name] [--no-stdlib]\n"
+      "                               write a standalone executable\n"
       "  red repl                     start the interactive prompt\n"
       "  red pkg <command>            manage this project's dependencies\n"
       "  red test [directory]         run the tests in a directory\n"
@@ -394,6 +395,41 @@ std::string moduleNameFor(const std::string& path) {
   return name;
 }
 
+// The source libraries shipped with Red live in `lib` in a checkout and
+// `lib/red` next to an installed interpreter. Include that library tree in
+// every standalone executable so its imports do not depend on the build
+// machine having the same Red installation.
+std::string shippedLibraryDirectory() {
+  if (executablePath().empty()) return "";
+  std::string base = directoryOf(absolutePath(executablePath()));
+  const std::string candidates[] = {
+      joinPath(directoryOf(base), "lib/red"),
+      joinPath(directoryOf(base), "lib"),
+  };
+  for (const std::string& candidate : candidates) {
+    if (fileExists(candidate) && isDirectory(candidate)) return candidate;
+  }
+  return "";
+}
+
+void collectRedFiles(const std::string& directory,
+                     std::vector<std::string>* out) {
+  DIR* handle = ::opendir(directory.c_str());
+  if (handle == nullptr) return;
+  while (dirent* entry = ::readdir(handle)) {
+    const std::string name = entry->d_name;
+    if (name == "." || name == "..") continue;
+    std::string path = joinPath(directory, name);
+    if (isDirectory(path)) {
+      collectRedFiles(path, out);
+    } else if (name.size() >= 4 &&
+               name.compare(name.size() - 4, 4, ".red") == 0) {
+      out->push_back(absolutePath(path));
+    }
+  }
+  ::closedir(handle);
+}
+
 // Compiles one module and records where its imports lead. Returns false
 // after reporting why.
 bool bundleModule(Runtime& runtime, const std::string& path,
@@ -453,9 +489,10 @@ bool bundleModule(Runtime& runtime, const std::string& path,
 }
 
 // `red build app.red -o app` writes a copy of this interpreter with the
-// program, and every module it imports, on the end of it.
+// program and its modules on the end. By default it also carries every
+// shipped Red library; `--no-stdlib` leaves out unused library modules.
 int buildExecutable(Runtime& runtime, const std::string& path,
-                    const std::string& outPath) {
+                    const std::string& outPath, bool includeStandardLibrary) {
   std::string resolved = absolutePath(path);
   if (!fileExists(resolved)) {
     std::fprintf(stderr, "Cannot open '%s'.\n", path.c_str());
@@ -464,6 +501,16 @@ int buildExecutable(Runtime& runtime, const std::string& path,
 
   Bundle bundle;
   std::vector<std::string> queue{resolved};
+  if (includeStandardLibrary) {
+    std::string libraryDirectory = shippedLibraryDirectory();
+    if (!libraryDirectory.empty()) {
+      std::vector<std::string> shippedLibraries;
+      collectRedFiles(libraryDirectory, &shippedLibraries);
+      std::sort(shippedLibraries.begin(), shippedLibraries.end());
+      queue.insert(queue.end(), shippedLibraries.begin(),
+                   shippedLibraries.end());
+    }
+  }
   std::vector<std::string> seen;
   while (!queue.empty()) {
     std::string next = queue.front();
@@ -1160,14 +1207,25 @@ int main(int argc, const char* argv[]) {
   }
   if (command == "build") {
     if (positional.size() < 2) {
-      std::fprintf(stderr, "Usage: red build <script.red> [-o name]\n");
+      std::fprintf(stderr,
+                   "Usage: red build <script.red> [-o name] [--no-stdlib]\n");
       return kExitUsage;
     }
     std::string outPath = executableNameFor(positional[1]);
-    for (size_t i = 2; i + 1 < positional.size(); i++) {
-      if (positional[i] == "-o") outPath = positional[i + 1];
+    bool includeStandardLibrary = true;
+    for (size_t i = 2; i < positional.size(); i++) {
+      if (positional[i] == "-o" && i + 1 < positional.size()) {
+        outPath = positional[++i];
+      } else if (positional[i] == "--no-stdlib") {
+        includeStandardLibrary = false;
+      } else {
+        std::fprintf(stderr, "Unknown option '%s' for `red build`.\n",
+                     positional[i].c_str());
+        return kExitUsage;
+      }
     }
-    return buildExecutable(runtime, positional[1], outPath);
+    return buildExecutable(runtime, positional[1], outPath,
+                           includeStandardLibrary);
   }
   if (command == "compile") {
     if (positional.size() < 2) {

@@ -132,7 +132,7 @@ The executable built by `setup.sh` is `build/red`:
 | `red program.red [args]` | Run a Red program |
 | `red repl` | Try expressions interactively |
 | `red compile in.red [-o out]` | Write a `.redc` bytecode file |
-| `red build in.red [-o name]` | Create a standalone executable |
+| `red build in.red [-o name] [--no-stdlib]` | Create a standalone executable |
 | `red test [directory]` | Run Red tests |
 | `red debug program.red` | Step through a program and inspect locals |
 | `red fmt -w files` | Format source files in place |
@@ -158,6 +158,12 @@ Useful examples:
 # Make the garbage collector collect before every allocation.
 ./build/red test tests --gc-stress
 ```
+
+The executable includes the shipped Red libraries, including `andy` and
+`std`, as well as the program's imported modules. It can use those libraries
+without a Red installation or library directory on the destination machine.
+Pass `--no-stdlib` to leave out unused shipped Red library modules and make
+a smaller executable. Modules the program imports are still included.
 
 The debugger uses source line information, so give it a `.red` file rather
 than a compiled `.redc` file. The formatter checks that its output tokenizes

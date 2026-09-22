@@ -22,6 +22,12 @@ print("hello, ${name.get_value()}");
 
 That is [`examples/andy_hello.red`](../examples/andy_hello.red).
 
+`red build` includes the shipped Red libraries in the standalone executable,
+so a program importing `andy` carries its Red modules with it. A native
+window backend still depends on its native extension being available at run
+time. Pass `--no-stdlib` to omit unused shipped Red library modules; modules
+the program imports remain bundled.
+
 ```
 $ red examples/andy_hello.red                     in this terminal
 $ ANDY_BACKEND=native red examples/andy_hello.red in a window

@@ -14,6 +14,10 @@ It is found automatically: `lib` is on the library search path whenever
 `red` is run from `build/` or installed beside it. The `.red` suffix is
 optional in the import, and a directory is entered through the file named
 after it, so `"std/http"` and `"std/http.red"` are the same import.
+When you use `red build`, all shipped Red libraries, including `std`, are
+included in the standalone executable and remain available without the
+library files on the destination machine. Pass `--no-stdlib` to omit unused
+library modules; any modules your program imports are still included.
 
 | Module | What it is |
 |---|---|
