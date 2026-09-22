@@ -32,15 +32,21 @@ import "std/strings" as strings;
 
 | File | What it is |
 |---|---|
+| [`andy.red`](andy.red), [`andy/`](andy) | A user interface library. The same program draws in a terminal or in a window. |
 | [`cli.red`](cli.red) | Command line parsing: flags, options, `--`, and a usage message. |
 | [`json.red`](json.red) | JSON, read and written, with sorted keys and an indented form. |
 | [`crc32.red`](crc32.red) | CRC-32. Written in Red, with a C++ half in [`../ffi/crc32_ext.cpp`](../ffi/crc32_ext.cpp) that it uses when it is built. |
 
 ```red
+import "andy" as andy;
 import "cli.red" as cli;
 import "json.red" as json;
 import "crc32.red" as crc32;
 ```
+
+[docs/andy.md](../docs/andy.md) is andy's reference and
+[`../examples/andy_demo.red`](../examples/andy_demo.red) is a program
+that uses most of it.
 
 [docs/libraries.md](../docs/libraries.md) explains how the search path
 works and how to write a library of your own, in Red or in C++.

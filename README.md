@@ -218,6 +218,38 @@ print(lib.sym("mathx_hypot")(3, 4));
 See [docs/libraries.md](docs/libraries.md) for the search path, extension
 build helper, and complete FFI contract.
 
+## A user interface
+
+[`lib/andy`](lib/andy) is a user interface library. The same program draws in
+the terminal it was started in, or in a window of its own.
+
+```red
+import "andy" as andy;
+
+const name = andy.Input("", "your name");
+
+andy.run(andy.Panel("Hello",
+  andy.Column(
+    andy.Label("What should I call you?"),
+    name,
+    andy.Row(andy.Spacer(), andy.Button("Done", fun (b) { andy.stop(); })),
+  ).spaced(1).padded(andy.uniform(1))));
+
+print("hello, ${name.get_value()}");
+```
+
+```bash
+./build/red examples/andy_demo.red                  # in this terminal
+ANDY_BACKEND=native ./build/red examples/andy_demo.red   # in a window
+```
+
+Rows and columns, panels, grids and scrolling views; labels, buttons,
+checkboxes, sliders, text fields, dropdowns, lists, tables, trees, tabs,
+menus and dialogs. Widgets name their colours in a theme rather than choosing
+them, so a program can be recoloured by somebody who has never read it.
+
+See [docs/andy.md](docs/andy.md).
+
 ## A self-hosted compiler
 
 [`selfhost/redc.red`](selfhost/redc.red) contains a compiler written in Red.
@@ -241,6 +273,7 @@ The compiler emits the same `.redc` format as the C++ compiler. See
 | [`docs/language.md`](docs/language.md) | Language reference and grammar |
 | [`docs/stdlib.md`](docs/stdlib.md) | Built-in functions and methods |
 | [`docs/libraries.md`](docs/libraries.md) | Red libraries and C/C++ extensions |
+| [`docs/andy.md`](docs/andy.md) | The user interface library |
 | [`docs/design.md`](docs/design.md) | Runtime and implementation decisions |
 | [`docs/bytecode.md`](docs/bytecode.md) | Instructions and `.redc` format |
 | [`docs/bootstrapping.md`](docs/bootstrapping.md) | Self-hosting details |

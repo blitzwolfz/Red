@@ -224,8 +224,8 @@ fun choose(options = nil) {
   if (term.available()) { return term.Terminal(settings); }
   if (native.available()) { return native.Window(settings); }
   throw error("andy found nothing to draw on: no terminal, and no window " +
-              "system. Set $ANDY_BACKEND to headless to run without one.",
-              nil, "io");
+    "system. Set $ANDY_BACKEND to headless to run without one.",
+    nil, "io");
 }
 
 // Which backends this installation can use, as a map. A program that

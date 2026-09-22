@@ -30,16 +30,16 @@ const LANGUAGES = ["Red", "C", "Lisp", "Smalltalk", "Erlang", "Forth"];
 // ---- page one: the controls ----
 
 const status = andy.StatusBar("Ready.")
-    .hint("tab", "move")
-    .hint("alt+1..4", "page")
-    .hint("ctrl+q", "quit");
+.hint("tab", "move")
+.hint("alt+1..4", "page")
+.hint("ctrl+q", "quit");
 
 fun say(message) { status.set_message(message); }
 
 const nameField = andy.Input("Ada", "your name").named("name");
 const passField = andy.Input("", "secret").masked().named("pass");
 const sizeChoice = andy.RadioGroup(["Small", "Medium", "Large"], "Medium")
-    .named("size");
+.named("size");
 const languageChoice = andy.Select(LANGUAGES, "Red").named("language");
 const verbose = andy.Checkbox("Say more while working", true).named("verbose");
 const darkMode = andy.Switch("Dark", true).named("dark");
@@ -51,16 +51,16 @@ languageChoice.on_change = fun (s) { say("Chose ${s.get_value()}"); };
 volume.on_change = fun (s) { say("Volume ${s.get_value()}"); };
 
 const controls = andy.Panel("A form",
-    andy.Grid(["auto", "1fr"], 2,
-        andy.Label("Name"), nameField,
-        andy.Label("Password"), passField,
-        andy.Label("Language"), languageChoice,
-        andy.Label("Size"), sizeChoice,
-        andy.Label(""), verbose,
-        andy.Label(""), darkMode,
-        andy.Label("Volume"), volume,
-        andy.Label("Progress"), progress
-    ).spaced(2, 0).padded(andy.uniform(1)));
+  andy.Grid(["auto", "1fr"], 2,
+    andy.Label("Name"), nameField,
+    andy.Label("Password"), passField,
+    andy.Label("Language"), languageChoice,
+    andy.Label("Size"), sizeChoice,
+    andy.Label(""), verbose,
+    andy.Label(""), darkMode,
+    andy.Label("Volume"), volume,
+    andy.Label("Progress"), progress
+  ).spaced(2, 0).padded(andy.uniform(1)));
 
 // ---- page two: the views ----
 
@@ -81,7 +81,7 @@ fun build_tree() {
   const root = andy.Node("andy");
   const lib = andy.Node("lib");
   lib.add(andy.Node("widgets.red"), andy.Node("views.red"),
-          andy.Node("app.red"));
+    andy.Node("app.red"));
   const docs = andy.Node("docs");
   docs.add(andy.Node("andy.md"));
   root.add(lib, docs, andy.Node("README.md"));
@@ -93,23 +93,23 @@ fun build_tree() {
 const tree = andy.Tree([build_tree()]);
 
 const views_page = andy.Row(
-    andy.Panel("People", people.growing(1)).growing(3),
-    andy.Column(
-        andy.Panel("Languages", languages.growing(1)).growing(1),
-        andy.Panel("Files", tree.growing(1)).growing(1)
-    ).growing(2)
+  andy.Panel("People", people.growing(1)).growing(3),
+  andy.Column(
+    andy.Panel("Languages", languages.growing(1)).growing(1),
+    andy.Panel("Files", tree.growing(1)).growing(1)
+  ).growing(2)
 );
 
 // ---- page three: text ----
 
 const NOTES = "andy draws a grid of cells.\n" +
-    "\n" +
-    "A cell is one column wide and one line tall, which is what a\n" +
-    "terminal has, and the window backend draws on the same grid, so\n" +
-    "that a program written for one looks like itself in the other.\n" +
-    "\n" +
-    "Type here. The arrow keys move, ctrl+z undoes, and the view\n" +
-    "scrolls when the caret reaches an edge.";
+"\n" +
+"A cell is one column wide and one line tall, which is what a\n" +
+"terminal has, and the window backend draws on the same grid, so\n" +
+"that a program written for one looks like itself in the other.\n" +
+"\n" +
+"Type here. The arrow keys move, ctrl+z undoes, and the view\n" +
+"scrolls when the caret reaches an edge.";
 
 const notes = andy.TextArea(NOTES);
 
@@ -121,86 +121,86 @@ fun swatches() {
   const column = andy.Column();
   column.add(andy.Label("The theme, by name:").styled("title"));
   for (let name in ["text", "muted", "accent", "selection", "error",
-                    "warning", "success", "info", "header", "button.focused"]) {
+      "warning", "success", "info", "header", "button.focused"]) {
     column.add(andy.Label("  " + name.pad_right(18) +
-                          "the quick brown fox").styled(name));
+        "the quick brown fox").styled(name));
   }
   column.add(andy.Separator("Borders"));
   for (let name in ["single", "rounded", "double", "thick", "ascii"]) {
     column.add(andy.Panel(name, andy.Label("  a box  "))
-                   .with_border(andy.style.border(name)).sized(nil, 3));
+      .with_border(andy.style.border(name)).sized(nil, 3));
   }
   return column;
 }
 
 const about_page = andy.Panel("This screen",
-    andy.Row(
-        andy.Scroll(swatches()).growing(1),
-        andy.Column(
-            andy.Label("").named("facts").wrapping().growing(1)
-        ).growing(1)
-    ).padded(andy.uniform(1)));
+  andy.Row(
+    andy.Scroll(swatches()).growing(1),
+    andy.Column(
+      andy.Label("").named("facts").wrapping().growing(1)
+    ).growing(1)
+  ).padded(andy.uniform(1)));
 
 // ---- putting it together ----
 
 const pages = andy.Tabs()
-    .page("Form", controls)
-    .page("Views", views_page)
-    .page("Text", text_page)
-    .page("Screen", about_page);
+.page("Form", controls)
+.page("Views", views_page)
+.page("Text", text_page)
+.page("Screen", about_page);
 
 const bar = andy.MenuBar();
 
 const root = andy.Column(bar.sized(nil, 1), pages.growing(1),
-                         status.sized(nil, 1));
+  status.sized(nil, 1));
 
 const window = andy.App(root, {"title": "andy"});
 
 bar.menu("File", [
-  andy.MenuItem("Open...", fun (item) {
-    window.prompt("Open", "Which file?", fun (answer) {
-      if (answer == nil) {
-        say("Cancelled.");
-      } else {
-        say("Would open ${answer}");
-      }
-    }, "notes.txt");
-  }, "ctrl+o"),
-  andy.MenuItem("Save", fun (item) { window.toast("Saved", "success"); },
-                "ctrl+s"),
-  andy.Divider(),
-  andy.MenuItem("Quit", fun (item) { window.request_close(); }, "ctrl+q"),
-]);
+    andy.MenuItem("Open...", fun (item) {
+        window.prompt("Open", "Which file?", fun (answer) {
+            if (answer == nil) {
+              say("Cancelled.");
+            } else {
+              say("Would open ${answer}");
+            }
+          }, "notes.txt");
+      }, "ctrl+o"),
+    andy.MenuItem("Save", fun (item) { window.toast("Saved", "success"); },
+      "ctrl+s"),
+    andy.Divider(),
+    andy.MenuItem("Quit", fun (item) { window.request_close(); }, "ctrl+q"),
+  ]);
 
 bar.menu("Edit", [
-  andy.MenuItem("Copy notes", fun (item) {
-    if (window.copy(notes.get_value())) { window.toast("Copied"); }
-    else { window.toast("This screen has no clipboard", "warning"); }
-  }, "ctrl+c"),
-  andy.MenuItem("Clear notes", fun (item) {
-    window.confirm("Clear", "Throw away the notes?", fun (yes) {
-      if (yes) {
-        notes.set_value("");
-        say("Cleared.");
-      }
-    });
-  }),
-]);
+    andy.MenuItem("Copy notes", fun (item) {
+        if (window.copy(notes.get_value())) { window.toast("Copied"); }
+        else { window.toast("This screen has no clipboard", "warning"); }
+      }, "ctrl+c"),
+    andy.MenuItem("Clear notes", fun (item) {
+        window.confirm("Clear", "Throw away the notes?", fun (yes) {
+            if (yes) {
+              notes.set_value("");
+              say("Cleared.");
+            }
+          });
+      }),
+  ]);
 
 bar.menu("View", [
-  andy.MenuItem("Dark", fun (item) { window.set_theme(andy.theme.DARK); }),
-  andy.MenuItem("Light", fun (item) { window.set_theme(andy.theme.LIGHT); }),
-  andy.MenuItem("High contrast",
-                fun (item) { window.set_theme(andy.theme.CONTRAST); }),
-  andy.MenuItem("Monochrome", fun (item) { window.set_theme(andy.theme.MONO); }),
-]);
+    andy.MenuItem("Dark", fun (item) { window.set_theme(andy.theme.DARK); }),
+    andy.MenuItem("Light", fun (item) { window.set_theme(andy.theme.LIGHT); }),
+    andy.MenuItem("High contrast",
+      fun (item) { window.set_theme(andy.theme.CONTRAST); }),
+    andy.MenuItem("Monochrome", fun (item) { window.set_theme(andy.theme.MONO); }),
+  ]);
 
 bar.menu("Help", [
-  andy.MenuItem("About", fun (item) {
-    window.message("andy", "A user interface library for Red. The same " +
-                           "program draws in a terminal and in a window.");
-  }, "f1"),
-]);
+    andy.MenuItem("About", fun (item) {
+        window.message("andy", "A user interface library for Red. The same " +
+          "program draws in a terminal and in a window.");
+      }, "f1"),
+  ]);
 
 // The bar is not in the focus ring — a menu bar that the tab key walked
 // into would be in the way — so its menus are reached by key instead.
@@ -217,9 +217,9 @@ for (let i in range(1, 5)) {
 // redraws only then.
 let filled = 0;
 window.every(0.15, fun () {
-  filled = (filled + 2) % 101;
-  progress.set_value(filled);
-});
+    filled = (filled + 2) % 101;
+    progress.set_value(filled);
+  });
 
 // The facts panel is filled in once the backend is known, since what it
 // has to say is about the backend.
@@ -228,14 +228,14 @@ window.on_frame = fun (w) {
   if (facts != nil and facts.value == "") {
     const size = w.screen.size();
     facts.set_text(
-        "backend: ${w.screen.name}\n" +
-        "size: ${size.width} by ${size.height} cells\n" +
-        "colour: ${w.screen.depth()}\n" +
-        "mouse: ${w.screen.has_mouse()}\n" +
-        "theme: ${w.current_theme().name}\n\n" +
-        "Everything on the left is named in the theme rather than " +
-        "coloured in the widget, which is what lets the View menu " +
-        "recolour the whole program without a single widget knowing.");
+      "backend: ${w.screen.name}\n" +
+      "size: ${size.width} by ${size.height} cells\n" +
+      "colour: ${w.screen.depth()}\n" +
+      "mouse: ${w.screen.has_mouse()}\n" +
+      "theme: ${w.current_theme().name}\n\n" +
+      "Everything on the left is named in the theme rather than " +
+      "coloured in the widget, which is what lets the View menu " +
+      "recolour the whole program without a single widget knowing.");
   }
 };
 
@@ -244,9 +244,9 @@ window.on_close = fun (w) {
   if (!w.asked_already) {
     w.asked_already = true;
     w.confirm("Quit", "Stop the demo?", fun (yes) {
-      if (yes) { w.quit(); }
-      else { w.asked_already = false; }
-    });
+        if (yes) { w.quit(); }
+        else { w.asked_already = false; }
+      });
     return false;
   }
   return true;

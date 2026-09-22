@@ -30,7 +30,9 @@ after it, so `"std/http"` and `"std/http.red"` are the same import.
 
 The older libraries — [`cli.red`](../lib/cli.red),
 [`json.red`](../lib/json.red), [`crc32.red`](../lib/crc32.red) — sit
-beside them and are imported by their own names.
+beside them and are imported by their own names, as does
+[`andy`](../lib/andy), the user interface library, which has a reference
+of its own in [docs/andy.md](andy.md).
 
 ## std/http
 

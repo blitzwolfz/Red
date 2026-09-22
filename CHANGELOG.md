@@ -4,6 +4,37 @@ Red follows no release schedule. The bytecode format has a version of its
 own, tracked in [docs/bytecode.md](docs/bytecode.md), and a `.redc` built
 by one version is refused rather than misread by another.
 
+## Unreleased
+
+Bytecode format: **3**, unchanged.
+
+### Added
+
+- **`andy`, a user interface library**, in [`lib/andy`](lib/andy). The same
+  program draws in the terminal it was started in or in a window of its own;
+  nothing above the backend knows which it got. Rows, columns, panels, grids
+  and scrolling views; labels, buttons, checkboxes, switches, radio groups,
+  sliders, progress bars, text fields, text areas and dropdowns; lists,
+  tables, trees, tabs, menus, status bars, toasts and dialogs. Widgets name
+  their colours in a theme rather than choosing them, and there are four
+  themes, one of which uses no colour at all.
+  [docs/andy.md](docs/andy.md) is the reference and
+  [`examples/andy_demo.red`](examples/andy_demo.red) uses most of it.
+- Two native halves for it, both built by the repository's CMake.
+  `andy_ext.so` is what puts a terminal into raw mode, asks its size and
+  reads without waiting — three things the standard library has no reason
+  to offer. `andy-gui` is the window: Cocoa on macOS, X11 elsewhere, and a
+  build with neither reports that rather than being missing. It is a program
+  of its own because a window system insists on the process's main thread
+  and Red's scheduler moves a task between worker threads; a window that
+  hangs therefore cannot hang the program, and the socket between the two
+  parks the task, so a window costs no thread.
+- A headless backend, which is how andy is tested: real widgets, real
+  layout, real drawing, and the screen read back as text.
+  `andy.render(root, width, height)` draws a tree once and gives back a
+  string, for a screenshot in a README or a look at a layout without
+  starting anything.
+
 ## 0.4.0
 
 Bytecode format: **3**, unchanged. Every `.redc` built by 0.2.0 still
