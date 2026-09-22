@@ -138,18 +138,14 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
         NSRectFill(run);
       }
 
-      NSMutableString* text = [NSMutableString string];
-      for (int i = x; i < end; i++) {
+      bool anything = false;
+      for (int i = x; i < end && !anything; i++) {
         andy::Cell* cell = grid->at(i, y);
         if (cell->width == 0) continue;  // the right half of a wide one
-        if (cell->text.empty()) {
-          [text appendString:@" "];
-          continue;
-        }
-        [text appendString:[NSString stringWithUTF8String:cell->text.c_str()]];
+        if (!cell->text.empty() && cell->text != " ") anything = true;
       }
 
-      if ([text length] > 0) {
+      if (anything) {
         NSFont* font = self.font;
         if ((first->attr & andy::kBold) != 0) font = self.boldFont;
         else if ((first->attr & andy::kItalic) != 0) font = self.italicFont;
@@ -175,11 +171,16 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
         for (int i = x; i < end; i++) {
           andy::Cell* cell = grid->at(i, y);
           if (cell->width == 0) continue;
-          NSString* piece = @" ";
-          if (!cell->text.empty()) {
-            piece = [NSString stringWithUTF8String:cell->text.c_str()];
+          if (cell->text.empty() || cell->text == " ") {
+            column += (cell->width >= 2) ? 2 : 1;
+            continue;
           }
-          if (piece == nil) piece = @" ";
+          // Nil for anything that is not valid UTF-8, which is not
+          // supposed to happen and must not be a crash if it does: an
+          // exception thrown out of drawRect unwinds through AppKit and
+          // takes the autorelease pool with it.
+          NSString* piece = [NSString stringWithUTF8String:cell->text.c_str()];
+          if (piece == nil) piece = @"\uFFFD";
           [piece drawAtPoint:NSMakePoint(column * self.cellWidth,
                                          top + self.baseline)
               withAttributes:attributes];
@@ -413,6 +414,11 @@ class CocoaHost : public Host {
     }
   }
 
+  // Asking how big the window is must not change what it is showing:
+  // andy sends only what differed from the last frame, so a grid
+  // cleared behind its back would leave the window blank until every
+  // cell happened to change. present() is the only thing that writes
+  // here.
   void present(const Grid& grid) override {
     grid_ = grid;
     @autoreleasepool {
@@ -476,9 +482,6 @@ class CocoaHost : public Host {
       int r = (int)floor(bounds.size.height / view_.cellHeight);
       *cols = c > 1 ? c : 1;
       *rows = r > 1 ? r : 1;
-      if (grid_.cols != *cols || grid_.rows != *rows) {
-        grid_.resize(*cols, *rows);
-      }
     }
   }
 

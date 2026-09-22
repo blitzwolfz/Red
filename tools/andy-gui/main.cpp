@@ -68,9 +68,15 @@ std::string field(const std::string& line, size_t* at) {
   return line.substr(start, end - start);
 }
 
+// Everything after the one space that ends the previous field.
+//
+// Exactly one: the text of a run is what andy drew, and what andy drew
+// is very often a row of spaces. Skipping them the way field() does
+// would shift a run left by however much of it was blank, which is a
+// whole class of bug that only shows up on the screen.
 std::string rest_of(const std::string& line, size_t at) {
-  while (at < line.size() && line[at] == ' ') at++;
   if (at >= line.size()) return "";
+  if (line[at] == ' ') at++;
   return line.substr(at);
 }
 
@@ -357,7 +363,12 @@ int main(int argc, char** argv) {
         // A frame is built away from the one on screen, so a window
         // redrawn while it arrives shows the last complete one rather
         // than half of two.
-        building.resize(grid.cols, grid.rows);
+        //
+        // It starts as a copy of what is on screen, not as a blank
+        // grid, because andy sends only the runs that differ from the
+        // frame before. Clearing here would throw away every cell it
+        // did not mention, which is almost all of them.
+        building = grid;
         building.cursor_on = false;
         continue;
       }

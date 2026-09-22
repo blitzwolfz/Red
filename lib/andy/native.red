@@ -99,6 +99,11 @@ class Window < Backend {
     // window system that is busy can take a moment; one that is not
     // there at all never answers.
     this.patience = options.get("patience", 10);
+    // How long a frame may take to go out. Generous: the other end is
+    // on the same machine and reading as fast as it can, so reaching
+    // this at all means the window has stopped answering.
+    this.write_patience = options.get("write_patience", 2);
+    this.trace = env("ANDY_TRACE");
   }
 
   // The window's own colours, which are true colour and always have
@@ -219,11 +224,22 @@ class Window < Backend {
     // would not be, and a program should not die of a window closing.
     if (this.link == nil or this.closed) { return this; }
     try {
+      // A socket has one timeout for both directions, and the two want
+      // very different things. A read must not wait at all, because the
+      // event loop asks what has arrived and sleeps between asks; a
+      // write must wait, because a whole frame is tens of kilobytes and
+      // a write that gives up halfway delivers half a frame. So the
+      // timeout is widened for the write and narrowed again after it.
+      this.link.set_timeout(this.write_patience);
       this.link.write(line + "\n");
     } catch (e: "net") {
       // The window has gone. The next poll reports it; there is nothing
       // useful to do about a frame that could not be delivered.
       this.closed = true;
+    } catch (e: "timeout") {
+      this.closed = true;
+    } finally {
+      if (this.link != nil) { this.link.set_timeout(0.001); }
     }
     return this;
   }
@@ -273,7 +289,12 @@ class Window < Backend {
                  str(surface.cursor.y));
     }
     parts.push("end");
-    this.send(parts.join("\n"));
+    const payload = parts.join("\n");
+    // $ANDY_TRACE names a file to append every frame to, which is how a
+    // disagreement between the two halves is settled: what andy sent is
+    // then a text file next to what the window drew.
+    if (this.trace != nil) { append_file(this.trace, payload + "\n"); }
+    this.send(payload);
     this.previous = surface.snapshot();
     return this;
   }
