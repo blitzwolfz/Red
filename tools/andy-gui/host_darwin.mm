@@ -1,6 +1,6 @@
 // The Cocoa window, for macOS.
 //
-// A window holding a grid of cells drawn in a fixed pitch font. AppKit
+// A window holding a logical grid drawn into a pixel-sized surface. AppKit
 // insists on the main thread, which it has here because andy-gui is a
 // process whose main thread does nothing else.
 //
@@ -36,6 +36,7 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
 // andy-gui speaks.
 @interface AndyView : NSView
 @property(nonatomic, assign) andy::Grid* grid;
+@property(nonatomic, assign) andy::PixelScene* scene;
 @property(nonatomic, assign) CGFloat cellWidth;
 @property(nonatomic, assign) CGFloat cellHeight;
 @property(nonatomic, assign) CGFloat baseline;
@@ -71,9 +72,10 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
                                                    toHaveTrait:NSItalicFontMask];
   if (_italicFont == nil) _italicFont = _font;
 
-  // The cell is the advance of a character in a fixed pitch font, and
-  // the line height the font asks for. Rounding the width up to a whole
-  // point keeps columns from drifting apart across a wide window.
+  // These are the native font metrics used to choose the logical grid size.
+  // Drawing itself derives a cell's pixel rectangle from the current view,
+  // so a native window can be resized by arbitrary pixels without leaving
+  // a terminal-like strip along an edge.
   NSDictionary* attributes = @{NSFontAttributeName : _font};
   NSSize advance = [@"M" sizeWithAttributes:attributes];
   _cellWidth = ceil(advance.width);
@@ -92,19 +94,102 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
   [self.events addObject:line];
 }
 
+- (void)drawPixelScene:(andy::PixelScene*)scene inBounds:(NSRect)bounds {
+  for (const andy::PixelCommand& command : scene->commands) {
+    CGFloat y = bounds.size.height - command.y - command.height;
+    switch (command.kind) {
+      case andy::kFill: {
+        [ColorFor(command.background, kDefaultBg) setFill];
+        NSRectFill(NSMakeRect(command.x, y, command.width, command.height));
+        break;
+      }
+      case andy::kRect: {
+        NSRect box = NSMakeRect(command.x, y, command.width, command.height);
+        NSBezierPath* path = [NSBezierPath bezierPathWithRoundedRect:box
+                                                               xRadius:command.radius
+                                                               yRadius:command.radius];
+        if (command.background != andy::kDefaultColor) {
+          [ColorFor(command.background, kDefaultBg) setFill];
+          [path fill];
+        }
+        if (command.foreground != andy::kDefaultColor) {
+          [ColorFor(command.foreground, kDefaultFg) setStroke];
+          [path setLineWidth:command.stroke_width];
+          [path stroke];
+        }
+        break;
+      }
+      case andy::kLine: {
+        [ColorFor(command.foreground, kDefaultFg) setStroke];
+        NSBezierPath* path = [NSBezierPath bezierPath];
+        [path setLineWidth:command.stroke_width];
+        [path moveToPoint:NSMakePoint(command.x,
+                                      bounds.size.height - command.y)];
+        [path lineToPoint:NSMakePoint(command.x2,
+                                      bounds.size.height - command.y2)];
+        [path stroke];
+        break;
+      }
+      case andy::kText: {
+        CGFloat size = command.height > 0 ? command.height : 14.0;
+        NSFont* font = [NSFont systemFontOfSize:size];
+        if ((command.attr & andy::kBold) != 0) {
+          font = [NSFont boldSystemFontOfSize:size];
+        }
+        NSMutableDictionary* attributes = [NSMutableDictionary dictionary];
+        attributes[NSFontAttributeName] = font;
+        attributes[NSForegroundColorAttributeName] =
+            ColorFor(command.foreground, kDefaultFg);
+        if ((command.attr & andy::kUnderline) != 0) {
+          attributes[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+        }
+        if ((command.attr & andy::kStrike) != 0) {
+          attributes[NSStrikethroughStyleAttributeName] =
+              @(NSUnderlineStyleSingle);
+        }
+        NSString* value = [NSString stringWithUTF8String:command.text.c_str()];
+        if (value == nil) value = @"\uFFFD";
+        [value drawAtPoint:NSMakePoint(command.x,
+                                       bounds.size.height - command.y - size)
+             withAttributes:attributes];
+        break;
+      }
+      case andy::kCursor: {
+        [[ColorFor(command.foreground, kDefaultFg)
+            colorWithAlphaComponent:0.75] setFill];
+        NSRectFillUsingOperation(NSMakeRect(command.x, y, command.width,
+                                            command.height),
+                                 NSCompositingOperationDifference);
+        break;
+      }
+    }
+  }
+}
+
 // ---- drawing ----
 
 - (void)drawRect:(NSRect)dirty {
   [ColorFor(andy::kDefaultColor, kDefaultBg) setFill];
   NSRectFill(dirty);
-  if (self.grid == nullptr || self.grid->cols == 0) return;
+  if (self.scene != nullptr) {
+    [self drawPixelScene:self.scene inBounds:[self bounds]];
+    return;
+  }
+  if (self.grid == nullptr || self.grid->cols == 0 || self.grid->rows == 0) return;
 
   NSRect bounds = [self bounds];
   andy::Grid* grid = self.grid;
+  const CGFloat cell_width = bounds.size.width / grid->cols;
+  const CGFloat cell_height = bounds.size.height / grid->rows;
+  if (cell_width <= 0 || cell_height <= 0) return;
+  const CGFloat font_height = [_font ascender] - [_font descender] +
+                              [_font leading];
+  const CGFloat baseline = (cell_height - font_height) / 2.0 -
+                           [_font descender] + [_font leading] / 2.0;
 
   for (int y = 0; y < grid->rows; y++) {
-    CGFloat top = bounds.size.height - (y + 1) * self.cellHeight;
-    if (top + self.cellHeight < dirty.origin.y) continue;
+    CGFloat top = bounds.size.height - (y + 1) * cell_height;
+    if (top + cell_height < dirty.origin.y) continue;
     if (top > dirty.origin.y + dirty.size.height) continue;
 
     int x = 0;
@@ -131,8 +216,8 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
         bg = (swap == andy::kDefaultColor) ? kDefaultFg : swap;
       }
 
-      NSRect run = NSMakeRect(x * self.cellWidth, top,
-                              (end - x) * self.cellWidth, self.cellHeight);
+      NSRect run = NSMakeRect(x * cell_width, top,
+                              (end - x) * cell_width, cell_height);
       if (bg != andy::kDefaultColor || (first->attr & andy::kReverse) != 0) {
         [ColorFor(bg, kDefaultBg) setFill];
         NSRectFill(run);
@@ -181,8 +266,8 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
           // takes the autorelease pool with it.
           NSString* piece = [NSString stringWithUTF8String:cell->text.c_str()];
           if (piece == nil) piece = @"\uFFFD";
-          [piece drawAtPoint:NSMakePoint(column * self.cellWidth,
-                                         top + self.baseline)
+          [piece drawAtPoint:NSMakePoint(column * cell_width,
+                                         top + baseline)
               withAttributes:attributes];
           column += (cell->width >= 2) ? 2 : 1;
         }
@@ -192,9 +277,9 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
   }
 
   if (grid->cursor_on) {
-    CGFloat top = bounds.size.height - (grid->cursor_y + 1) * self.cellHeight;
-    NSRect caret = NSMakeRect(grid->cursor_x * self.cellWidth, top,
-                              self.cellWidth, self.cellHeight);
+    CGFloat top = bounds.size.height - (grid->cursor_y + 1) * cell_height;
+    NSRect caret = NSMakeRect(grid->cursor_x * cell_width, top,
+                              cell_width, cell_height);
     [[ColorFor(andy::kDefaultColor, kDefaultFg)
         colorWithAlphaComponent:0.75] setFill];
     NSRectFillUsingOperation(caret, NSCompositingOperationDifference);
@@ -280,8 +365,21 @@ NSColor* ColorFor(uint32_t value, uint32_t fallback) {
              button:(int)button wheel:(int)wheel {
   NSPoint where = [self convertPoint:[event locationInWindow] fromView:nil];
   NSRect bounds = [self bounds];
-  int x = (int)floor(where.x / self.cellWidth);
-  int y = (int)floor((bounds.size.height - where.y) / self.cellHeight);
+  int x = 0;
+  int y = 0;
+  if (self.scene != nullptr) {
+    // Pixel scenes receive the native pointer position directly. The
+    // compatibility canvas below still receives logical cell coordinates.
+    x = (int)floor(where.x);
+    y = (int)floor(bounds.size.height - where.y);
+  } else if (self.grid != nullptr && self.grid->cols > 0 && self.grid->rows > 0) {
+    CGFloat cell_width = bounds.size.width / self.grid->cols;
+    CGFloat cell_height = bounds.size.height / self.grid->rows;
+    x = (int)floor(where.x / cell_width);
+    y = (int)floor((bounds.size.height - where.y) / cell_height);
+    x = MIN(MAX(x, 0), self.grid->cols - 1);
+    y = MIN(MAX(y, 0), self.grid->rows - 1);
+  }
   if (x < 0) x = 0;
   if (y < 0) y = 0;
   NSUInteger flags = [event modifierFlags];
@@ -381,6 +479,7 @@ class CocoaHost : public Host {
       view_ = [[AndyView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100)];
       grid_.resize(cols, rows);
       view_.grid = &grid_;
+      view_.scene = nullptr;
 
       NSRect content = NSMakeRect(0, 0, cols * view_.cellWidth,
                                   rows * view_.cellHeight);
@@ -394,10 +493,9 @@ class CocoaHost : public Host {
       [window_ setTitle:[NSString stringWithUTF8String:title.c_str()]];
       [window_ setContentView:view_];
       [window_ setAcceptsMouseMovedEvents:YES];
-      // Resizing in whole cells, so the grid never has a half column of
-      // window left over along one edge.
-      [window_ setContentResizeIncrements:NSMakeSize(view_.cellWidth,
-                                                     view_.cellHeight)];
+      // The logical grid still changes at character-sized thresholds, but
+      // the native window itself is pixel-resizable. AndyView stretches
+      // the current grid over the exact content bounds between thresholds.
       [window_ setMinSize:NSMakeSize(view_.cellWidth * 20,
                                      view_.cellHeight * 5)];
 
@@ -420,9 +518,26 @@ class CocoaHost : public Host {
   // cell happened to change. present() is the only thing that writes
   // here.
   void present(const Grid& grid) override {
+    scene_.commands.clear();
+    view_.scene = nullptr;
     grid_ = grid;
     @autoreleasepool {
       [view_ setNeedsDisplay:YES];
+    }
+  }
+
+  void present(const PixelScene& scene) override {
+    scene_ = scene;
+    view_.scene = &scene_;
+    @autoreleasepool {
+      [view_ setNeedsDisplay:YES];
+    }
+  }
+
+  void set_pixel_size(int width, int height) override {
+    if (window_ == nil || width <= 0 || height <= 0) return;
+    @autoreleasepool {
+      [window_ setContentSize:NSMakeSize(width, height)];
     }
   }
 
@@ -490,6 +605,7 @@ class CocoaHost : public Host {
   AndyView* view_ = nil;
   AndyDelegate* delegate_ = nil;
   Grid grid_;
+  PixelScene scene_;
 };
 
 }  // namespace

@@ -18,6 +18,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <cmath>
+
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -79,12 +82,11 @@ class X11Host : public Host {
     utf8_atom_ = XInternAtom(display_, "UTF8_STRING", False);
     targets_atom_ = XInternAtom(display_, "TARGETS", False);
 
-    // Whole cells only, so there is never a half column along an edge.
+    // Keep a useful minimum, but let native pixel scenes and resized windows
+    // use arbitrary dimensions.
     XSizeHints* hints = XAllocSizeHints();
     if (hints != nullptr) {
-      hints->flags = PResizeInc | PMinSize | PBaseSize;
-      hints->width_inc = cell_width_;
-      hints->height_inc = cell_height_;
+      hints->flags = PMinSize | PBaseSize;
       hints->min_width = cell_width_ * 20;
       hints->min_height = cell_height_ * 5;
       hints->base_width = 0;
@@ -103,8 +105,23 @@ class X11Host : public Host {
   }
 
   void present(const Grid& grid) override {
+    scene_.commands.clear();
+    scene_active_ = false;
     grid_ = grid;
     draw();
+  }
+
+  void present(const PixelScene& scene) override {
+    scene_ = scene;
+    scene_active_ = true;
+    draw();
+  }
+
+  void set_pixel_size(int width, int height) override {
+    if (display_ == nullptr || width <= 0 || height <= 0) return;
+    XResizeWindow(display_, window_, static_cast<unsigned int>(width),
+                  static_cast<unsigned int>(height));
+    XFlush(display_);
   }
 
   bool pump(std::vector<std::string>* out, int wait_ms) override {
@@ -215,6 +232,14 @@ class X11Host : public Host {
     XFillRectangle(display_, pixmap_, gc_, 0, 0, pixmap_width_,
                    pixmap_height_);
 
+    if (scene_active_) {
+      draw_pixel_scene();
+      XCopyArea(display_, pixmap_, window_, gc_, 0, 0, pixmap_width_,
+                pixmap_height_, 0, 0);
+      XFlush(display_);
+      return;
+    }
+
     for (int y = 0; y < grid_.rows; y++) {
       int x = 0;
       while (x < grid_.cols) {
@@ -244,11 +269,17 @@ class X11Host : public Host {
           fg = mix(fg, bg, 0.45);
         }
 
-        const int px = x * cell_width_;
-        const int py = y * cell_height_;
+        const double cell_width = static_cast<double>(pixmap_width_) /
+                                  std::max(1, grid_.cols);
+        const double cell_height = static_cast<double>(pixmap_height_) /
+                                   std::max(1, grid_.rows);
+        const int px = static_cast<int>(std::lround(x * cell_width));
+        const int py = static_cast<int>(std::lround(y * cell_height));
+        const int px_end = static_cast<int>(std::lround(end * cell_width));
+        const int py_end = static_cast<int>(std::lround((y + 1) * cell_height));
         XSetForeground(display_, gc_, pixel_for(bg));
         XFillRectangle(display_, pixmap_, gc_, px, py,
-                       (end - x) * cell_width_, cell_height_);
+                       std::max(1, px_end - px), std::max(1, py_end - py));
 
         XSetForeground(display_, gc_, pixel_for(fg));
         // One cell at a time, so the grid stays a grid whatever the font
@@ -258,33 +289,41 @@ class X11Host : public Host {
           Cell* cell = grid_.at(i, y);
           if (cell->width == 0) continue;
           if (!cell->text.empty() && cell->text != " ") {
-            draw_utf8(column * cell_width_, py + ascent_, cell->text);
+            draw_utf8(static_cast<int>(std::lround(column * cell_width)),
+                      py + std::max(0, static_cast<int>(std::lround(
+                          (cell_height - (font_->ascent + font_->descent)) / 2))) +
+                          ascent_, cell->text);
           }
           column += (cell->width >= 2) ? 2 : 1;
         }
         if ((first->attr & kUnderline) != 0) {
-          XDrawLine(display_, pixmap_, gc_, px, py + cell_height_ - 1,
-                    px + (end - x) * cell_width_ - 1, py + cell_height_ - 1);
+          XDrawLine(display_, pixmap_, gc_, px, py_end - 1, px_end - 1,
+                    py_end - 1);
         }
         if ((first->attr & kStrike) != 0) {
-          const int middle = py + cell_height_ / 2;
-          XDrawLine(display_, pixmap_, gc_, px, middle,
-                    px + (end - x) * cell_width_ - 1, middle);
+          const int middle = py + (py_end - py) / 2;
+          XDrawLine(display_, pixmap_, gc_, px, middle, px_end - 1, middle);
         }
         x = end;
       }
     }
 
     if (grid_.cursor_on) {
+      const double cell_width = static_cast<double>(pixmap_width_) /
+                                std::max(1, grid_.cols);
+      const double cell_height = static_cast<double>(pixmap_height_) /
+                                 std::max(1, grid_.rows);
+      const int x = static_cast<int>(std::lround(grid_.cursor_x * cell_width));
+      const int y = static_cast<int>(std::lround(grid_.cursor_y * cell_height));
+      const int x_end = static_cast<int>(std::lround((grid_.cursor_x + 1) * cell_width));
+      const int y_end = static_cast<int>(std::lround((grid_.cursor_y + 1) * cell_height));
       XSetForeground(display_, gc_, pixel_for(kDefaultFg));
-      XFillRectangle(display_, pixmap_, gc_, grid_.cursor_x * cell_width_,
-                     grid_.cursor_y * cell_height_, cell_width_,
-                     cell_height_);
+      XFillRectangle(display_, pixmap_, gc_, x, y, std::max(1, x_end - x),
+                     std::max(1, y_end - y));
       Cell* under = grid_.at(grid_.cursor_x, grid_.cursor_y);
       if (under != nullptr && !under->text.empty()) {
         XSetForeground(display_, gc_, pixel_for(kDefaultBg));
-        draw_utf8(grid_.cursor_x * cell_width_,
-                  grid_.cursor_y * cell_height_ + ascent_, under->text);
+        draw_utf8(x, y + ascent_, under->text);
       }
     }
 
@@ -333,6 +372,52 @@ class X11Host : public Host {
                   static_cast<int>(glyphs.size()));
   }
 
+  void draw_pixel_scene() {
+    for (const PixelCommand& command : scene_.commands) {
+      const int x = static_cast<int>(std::lround(command.x));
+      const int y = static_cast<int>(std::lround(command.y));
+      const int width = std::max(1, static_cast<int>(std::lround(command.width)));
+      const int height = std::max(1, static_cast<int>(std::lround(command.height)));
+      const int bottom = static_cast<int>(pixmap_height_) - y - height;
+      switch (command.kind) {
+        case kFill:
+          XSetForeground(display_, gc_, pixel_for(command.background == kDefaultColor
+                                                       ? kDefaultBg : command.background));
+          XFillRectangle(display_, pixmap_, gc_, x, bottom, width, height);
+          break;
+        case kRect:
+          if (command.background != kDefaultColor) {
+            XSetForeground(display_, gc_, pixel_for(command.background));
+            XFillRectangle(display_, pixmap_, gc_, x, bottom, width, height);
+          }
+          if (command.foreground != kDefaultColor) {
+            XSetForeground(display_, gc_, pixel_for(command.foreground));
+            XDrawRectangle(display_, pixmap_, gc_, x, bottom, width - 1,
+                           height - 1);
+          }
+          break;
+        case kLine:
+          XSetForeground(display_, gc_, pixel_for(command.foreground == kDefaultColor
+                                                       ? kDefaultFg : command.foreground));
+          XDrawLine(display_, pixmap_, gc_, static_cast<int>(std::lround(command.x)),
+                    static_cast<int>(pixmap_height_ - std::lround(command.y)),
+                    static_cast<int>(std::lround(command.x2)),
+                    static_cast<int>(pixmap_height_ - std::lround(command.y2)));
+          break;
+        case kText:
+          XSetForeground(display_, gc_, pixel_for(command.foreground == kDefaultColor
+                                                       ? kDefaultFg : command.foreground));
+          draw_utf8(x, bottom + ascent_, command.text);
+          break;
+        case kCursor:
+          XSetForeground(display_, gc_, pixel_for(command.foreground == kDefaultColor
+                                                       ? kDefaultFg : command.foreground));
+          XFillRectangle(display_, pixmap_, gc_, x, bottom, width, height);
+          break;
+      }
+    }
+  }
+
   static uint32_t mix(uint32_t a, uint32_t b, double amount) {
     const double t = amount;
     uint32_t out = 0;
@@ -353,13 +438,17 @@ class X11Host : public Host {
       case ConfigureNotify: {
         const unsigned int width = event.xconfigure.width;
         const unsigned int height = event.xconfigure.height;
-        const int cols = width / cell_width_;
-        const int rows = height / cell_height_;
-        if (cols == cols_ && rows == rows_) return;
-        cols_ = cols > 1 ? cols : 1;
-        rows_ = rows > 1 ? rows : 1;
-        grid_.resize(cols_, rows_);
-        make_pixmap(width > 0 ? width : 1, height > 0 ? height : 1);
+        const int cols = std::max(1, static_cast<int>(width / cell_width_));
+        const int rows = std::max(1, static_cast<int>(height / cell_height_));
+        if (cols != cols_ || rows != rows_) {
+          cols_ = cols;
+          rows_ = rows;
+          grid_.resize(cols_, rows_);
+        }
+        if (width != pixmap_width_ || height != pixmap_height_) {
+          make_pixmap(width > 0 ? width : 1, height > 0 ? height : 1);
+        }
+        if (scene_active_) draw();
         return;
       }
       case FocusIn:
@@ -499,8 +588,8 @@ class X11Host : public Host {
 
   void report_button(const XEvent& event, std::vector<std::string>* out) {
     const XButtonEvent& button = event.xbutton;
-    const int x = button.x / cell_width_;
-    const int y = button.y / cell_height_;
+    const int x = scene_active_ ? button.x : column_at(button.x);
+    const int y = scene_active_ ? button.y : row_at(button.y);
     const int ctrl = (button.state & ControlMask) != 0 ? 1 : 0;
     const int alt = (button.state & Mod1Mask) != 0 ? 1 : 0;
     const int shift = (button.state & ShiftMask) != 0 ? 1 : 0;
@@ -529,10 +618,10 @@ class X11Host : public Host {
 
   void report_motion(const XEvent& event, std::vector<std::string>* out) {
     const XMotionEvent& motion = event.xmotion;
-    const int x = motion.x / cell_width_;
-    const int y = motion.y / cell_height_;
-    // Only report a move when it crosses into a different cell: a
-    // pointer wandering inside one cell has nothing to say.
+    const int x = scene_active_ ? motion.x : column_at(motion.x);
+    const int y = scene_active_ ? motion.y : row_at(motion.y);
+    // A cell surface only needs moves when it crosses a cell. Pixel scenes
+    // receive every native move so a hover target can track the pointer.
     if (x == pointer_x_ && y == pointer_y_) return;
     pointer_x_ = x;
     pointer_y_ = y;
@@ -551,6 +640,18 @@ class X11Host : public Host {
                    " " + std::to_string(shift));
   }
 
+  int column_at(int x) const {
+    if (cols_ <= 0 || pixmap_width_ == 0) return 0;
+    return std::max(0, std::min(cols_ - 1,
+        static_cast<int>(x * static_cast<double>(cols_) / pixmap_width_)));
+  }
+
+  int row_at(int y) const {
+    if (rows_ <= 0 || pixmap_height_ == 0) return 0;
+    return std::max(0, std::min(rows_ - 1,
+        static_cast<int>(y * static_cast<double>(rows_) / pixmap_height_)));
+  }
+
   Display* display_ = nullptr;
   int screen_ = 0;
   Window window_ = 0;
@@ -566,6 +667,7 @@ class X11Host : public Host {
   std::string clipboard_;
   std::map<uint32_t, unsigned long> pixels_;
   Grid grid_;
+  PixelScene scene_;
   int cols_ = 80;
   int rows_ = 24;
   int cell_width_ = 8;
@@ -575,6 +677,7 @@ class X11Host : public Host {
   int pointer_y_ = -1;
   int buttons_ = 0;
   bool closed_ = false;
+  bool scene_active_ = false;
 };
 
 }  // namespace

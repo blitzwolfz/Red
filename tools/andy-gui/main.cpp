@@ -25,6 +25,15 @@
 //   bell
 //   bye
 //
+// Native pixel scenes, independent of the terminal grid:
+//   pixel <width> <height>
+//   pfill <x> <y> <w> <h> <bg>
+//   prect <x> <y> <w> <h> <radius> <stroke> <fg> <bg>
+//   pline <x> <y> <x2> <y2> <stroke> <fg>
+//   ptext <x> <y> <size> <fg> <attr> <text>
+//   pcursor <x> <y> <w> <h> <fg>
+//   pixel_end
+//
 // Colours are decimal 0xRRGGBB, or -1 for the window's own. `text` runs
 // to the end of the line and is the only field that may contain spaces.
 //
@@ -84,6 +93,14 @@ long to_long(const std::string& value, long fallback = 0) {
   if (value.empty()) return fallback;
   char* end = nullptr;
   long result = strtol(value.c_str(), &end, 10);
+  if (end == value.c_str()) return fallback;
+  return result;
+}
+
+double to_double(const std::string& value, double fallback = 0) {
+  if (value.empty()) return fallback;
+  char* end = nullptr;
+  double result = strtod(value.c_str(), &end);
   if (end == value.c_str()) return fallback;
   return result;
 }
@@ -332,6 +349,7 @@ int main(int argc, char** argv) {
 
   andy::Grid grid;
   andy::Grid building;
+  andy::PixelScene pixel_scene;
   grid.resize(cols, rows);
   building.resize(cols, rows);
 
@@ -351,6 +369,78 @@ int main(int argc, char** argv) {
       if (word == "bye") {
         running = false;
         break;
+      }
+      if (word == "pixel") {
+        pixel_scene.width = static_cast<float>(to_double(field(line, &at)));
+        pixel_scene.height = static_cast<float>(to_double(field(line, &at)));
+        pixel_scene.commands.clear();
+        host->set_pixel_size(static_cast<int>(pixel_scene.width),
+                             static_cast<int>(pixel_scene.height));
+        continue;
+      }
+      if (word == "pfill") {
+        andy::PixelCommand command;
+        command.kind = andy::kFill;
+        command.x = static_cast<float>(to_double(field(line, &at)));
+        command.y = static_cast<float>(to_double(field(line, &at)));
+        command.width = static_cast<float>(to_double(field(line, &at)));
+        command.height = static_cast<float>(to_double(field(line, &at)));
+        command.background = to_color(field(line, &at));
+        pixel_scene.commands.push_back(command);
+        continue;
+      }
+      if (word == "prect") {
+        andy::PixelCommand command;
+        command.kind = andy::kRect;
+        command.x = static_cast<float>(to_double(field(line, &at)));
+        command.y = static_cast<float>(to_double(field(line, &at)));
+        command.width = static_cast<float>(to_double(field(line, &at)));
+        command.height = static_cast<float>(to_double(field(line, &at)));
+        command.radius = static_cast<float>(to_double(field(line, &at)));
+        command.stroke_width = static_cast<float>(to_double(field(line, &at), 1));
+        command.foreground = to_color(field(line, &at));
+        command.background = to_color(field(line, &at));
+        pixel_scene.commands.push_back(command);
+        continue;
+      }
+      if (word == "pline") {
+        andy::PixelCommand command;
+        command.kind = andy::kLine;
+        command.x = static_cast<float>(to_double(field(line, &at)));
+        command.y = static_cast<float>(to_double(field(line, &at)));
+        command.x2 = static_cast<float>(to_double(field(line, &at)));
+        command.y2 = static_cast<float>(to_double(field(line, &at)));
+        command.stroke_width = static_cast<float>(to_double(field(line, &at), 1));
+        command.foreground = to_color(field(line, &at));
+        pixel_scene.commands.push_back(command);
+        continue;
+      }
+      if (word == "ptext") {
+        andy::PixelCommand command;
+        command.kind = andy::kText;
+        command.x = static_cast<float>(to_double(field(line, &at)));
+        command.y = static_cast<float>(to_double(field(line, &at)));
+        command.height = static_cast<float>(to_double(field(line, &at), 14));
+        command.foreground = to_color(field(line, &at));
+        command.attr = static_cast<uint8_t>(to_long(field(line, &at)));
+        command.text = rest_of(line, at);
+        pixel_scene.commands.push_back(command);
+        continue;
+      }
+      if (word == "pcursor") {
+        andy::PixelCommand command;
+        command.kind = andy::kCursor;
+        command.x = static_cast<float>(to_double(field(line, &at)));
+        command.y = static_cast<float>(to_double(field(line, &at)));
+        command.width = static_cast<float>(to_double(field(line, &at)));
+        command.height = static_cast<float>(to_double(field(line, &at)));
+        command.foreground = to_color(field(line, &at));
+        pixel_scene.commands.push_back(command);
+        continue;
+      }
+      if (word == "pixel_end") {
+        host->present(pixel_scene);
+        continue;
       }
       if (word == "size") {
         int c = static_cast<int>(to_long(field(line, &at), cols));

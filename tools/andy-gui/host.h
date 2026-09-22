@@ -17,6 +17,8 @@
 #include <string>
 #include <vector>
 
+#include "cell_scene.h"
+
 namespace andy {
 
 // The attribute bits, the same numbers lib/andy/style.red uses.
@@ -30,43 +32,41 @@ enum Attr : uint8_t {
   kStrike = 64,
 };
 
-// A colour as 0xRRGGBB, or kDefaultColor for "whatever the window's own
-// foreground or background is".
-const uint32_t kDefaultColor = 0xff000000u;
+// A pixel scene is the native renderer's input. It deliberately has no
+// terminal concepts such as cells, columns, wide characters, or escape
+// attributes. The Red-side native toolkit can add ordinary GUI primitives
+// here without teaching the terminal backend about them.
+enum PixelCommandKind : uint8_t {
+  kFill = 0,
+  kRect = 1,
+  kLine = 2,
+  kText = 3,
+  kCursor = 4,
+};
 
-struct Cell {
-  // The characters to draw, as UTF-8. Empty means this cell is the right
-  // half of a double width character and is drawn by the left half.
-  std::string text;
-  uint32_t fg = kDefaultColor;
-  uint32_t bg = kDefaultColor;
+struct PixelCommand {
+  PixelCommandKind kind = kFill;
+  float x = 0;
+  float y = 0;
+  float width = 0;
+  float height = 0;
+  float x2 = 0;
+  float y2 = 0;
+  float radius = 0;
+  float stroke_width = 1;
+  uint32_t foreground = kDefaultColor;
+  uint32_t background = kDefaultColor;
   uint8_t attr = 0;
-  // 2 for the left half of a double width character, 1 otherwise.
-  uint8_t width = 1;
+  std::string text;
 };
 
-// One frame: what every cell should look like, and where the caret is.
-struct Grid {
-  int cols = 0;
-  int rows = 0;
-  std::vector<Cell> cells;
-  int cursor_x = 0;
-  int cursor_y = 0;
-  bool cursor_on = false;
-
-  void resize(int c, int r) {
-    cols = c;
-    rows = r;
-    cells.assign(static_cast<size_t>(c) * static_cast<size_t>(r), Cell{});
-  }
-
-  Cell* at(int x, int y) {
-    if (x < 0 || y < 0 || x >= cols || y >= rows) return nullptr;
-    return &cells[static_cast<size_t>(y) * cols + x];
-  }
+struct PixelScene {
+  float width = 0;
+  float height = 0;
+  std::vector<PixelCommand> commands;
 };
 
-// A window showing a grid.
+// A native window. It can show the compatibility grid or a pixel scene.
 //
 // Every method is called from the process's main thread, because that is
 // where AppKit insists on being and where X11 is simplest. andy-gui is a
@@ -81,6 +81,18 @@ class Host {
 
   // Shows a frame.
   virtual void present(const Grid& grid) = 0;
+
+  // Shows a native pixel scene. Hosts that do not implement the optional
+  // path simply keep showing the last cell frame; the native hosts in this
+  // tree implement it.
+  virtual void present(const PixelScene& scene) { (void)scene; }
+
+  // Requests the native surface size for a pixel scene. The compatibility
+  // cell path never calls this; a real GUI can choose its own dimensions.
+  virtual void set_pixel_size(int width, int height) {
+    (void)width;
+    (void)height;
+  }
 
   // Handles whatever the window system has queued, for at most
   // `wait_ms`, and appends a line per event to `out` in the protocol

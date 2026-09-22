@@ -28,14 +28,15 @@
 // | `andy/text` | How wide a string is, and how to cut one to fit. |
 // | `andy/event` | Key presses, the mouse, resizes. |
 // | `andy/theme` | Named styles, and four themes. |
-// | `andy/canvas` | The grid everything is drawn on. |
+// | `andy/canvas` | The cell surface used by terminal-compatible widgets. |
 // | `andy/layout` | Measuring and arranging. |
 // | `andy/widget` | What a widget is. |
 // | `andy/widgets` | Containers and controls. |
 // | `andy/views` | Lists, tables, trees, tabs, menus, bars. |
 // | `andy/backend` | What a screen has to do; a screen that is not one. |
 // | `andy/term` | The terminal backend. |
-// | `andy/native` | The window backend. |
+// | `andy/native` | The native window transport. |
+// | `andy/native_gui` | Pixel scenes and native GUI primitives. |
 // | `andy/app` | The loop, the focus, the dialogs. |
 //
 // docs/andy.md is the reference and examples/andy_demo.red is a program
@@ -55,11 +56,13 @@ import "andy/views" as views;
 import "andy/backend" as backend;
 import "andy/term" as term;
 import "andy/native" as native;
+import "andy/native_gui" as native_gui;
 import "andy/app" as app;
 
 // ---- the application ----
 
 const App = app.App;
+const NativeScene = native_gui.Scene;
 const Layer = app.Layer;
 
 // ---- widgets ----

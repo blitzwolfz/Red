@@ -21,11 +21,11 @@
 // program, and the socket parks the task while it waits, so a window
 // costs no thread at all.
 //
-// The grid is the same grid the terminal draws. A program written for
-// one runs in the other unchanged; what the window adds is a real
-// window — its own size, its own title, resizing in whole cells, the
-// system clipboard — and colour that never has to be reduced to a
-// palette.
+// The compatibility path can still show the same cell canvas as a terminal.
+// Native code may instead send a pixel scene: native_gui.Scene contains
+// rectangles, lines, text and controls with ordinary pixel coordinates. The
+// two protocols are kept separate so adding a native control never changes
+// terminal layout or terminal escape handling.
 
 import "andy/geom" as geom;
 import "andy/event" as event;
@@ -299,6 +299,38 @@ class Window < Backend {
     return this;
   }
 
+  // Show a pixel scene from andy/native_gui. This is deliberately separate
+  // from present(canvas): the latter is the terminal-compatible cell path,
+  // while this one is free to use native spacing, fonts and shapes.
+  present_scene(scene) {
+    if (!this.running or this.link == nil or scene == nil) { return this; }
+    this.previous = nil;
+    this.send(scene.lines().join("\n"));
+    return this;
+  }
+
+  // Small convenience loop for a pixel scene that does not need the full
+  // cell-widget App. It keeps the native window alive, reports close, and
+  // leaves richer event handling to the caller when needed.
+  run_scene(scene) {
+    this.start();
+    try {
+      this.present_scene(scene);
+      while (this.running) {
+        for (let one in this.poll()) {
+          if (one.kind == event.Kind.Close) { this.running = false; }
+        }
+        if (this.running) { sleep(0.01); }
+      }
+    } finally {
+      this.stop();
+    }
+    return this;
+  }
+
+  // Mouse events are cells while the last frame was a canvas and pixels
+  // while the last frame was a NativeScene. Keyboard and window events are
+  // unchanged in both modes.
   poll() {
     const events = [];
     if (!this.running) { return events; }

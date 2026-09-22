@@ -65,14 +65,15 @@ screen with nobody touching it costs one poll and one sleep per pass.
 | [`andy/text`](../lib/andy/text.red) | How wide a string is, and how to cut one to fit. |
 | [`andy/event`](../lib/andy/event.red) | Key presses, the mouse, resizes, pastes. |
 | [`andy/theme`](../lib/andy/theme.red) | Named styles, and four themes. |
-| [`andy/canvas`](../lib/andy/canvas.red) | The grid everything is drawn on. |
+| [`andy/canvas`](../lib/andy/canvas.red) | The cell surface used by terminal-compatible widgets. |
 | [`andy/layout`](../lib/andy/layout.red) | Measuring, and sharing out room. |
 | [`andy/widget`](../lib/andy/widget.red) | What a widget is. |
 | [`andy/widgets`](../lib/andy/widgets.red) | Containers and controls. |
 | [`andy/views`](../lib/andy/views.red) | Lists, tables, trees, tabs, menus, bars. |
 | [`andy/backend`](../lib/andy/backend.red) | What a screen has to do; a screen that is not one. |
 | [`andy/term`](../lib/andy/term.red) | The terminal backend. |
-| [`andy/native`](../lib/andy/native.red) | The window backend. |
+| [`andy/native`](../lib/andy/native.red) | The native window transport. |
+| [`andy/native_gui`](../lib/andy/native_gui.red) | Pixel scenes and native GUI primitives. |
 | [`andy/app`](../lib/andy/app.red) | The loop, the focus, the dialogs. |
 
 ## Running one
@@ -86,7 +87,7 @@ andy.run(root, options)
 | `title` | The window's title, and the terminal's while it runs. |
 | `backend` | `"auto"`, `"terminal"`, `"native"` or `"headless"`. |
 | `theme` | A theme, or a name. Defaults to `$ANDY_THEME`, then dark. |
-| `cols` `rows` | The size of a new window. Ignored by the terminal. |
+| `cols` `rows` | The compatibility grid size of a new window. Ignored by the terminal. |
 | `quit` | A key that stops the program. Defaults to `ctrl+q`. |
 | `screen` | A backend to use as it stands, instead of choosing one. |
 
@@ -361,6 +362,27 @@ and `$ANDY_COLOR` overrides the guess.
 A program of its own, `andy-gui`, built beside the interpreter. Cocoa on
 macOS, X11 elsewhere. andy listens on a loopback port, starts it pointed
 at that port, and then sends frames and reads back events.
+
+The compatibility `App` path can still show a cell canvas in a window.
+Native code can instead use `andy.NativeScene`: a pixel-based scene with
+rectangles, lines, text, rounded corners and a cursor. It is sent with
+`screen.present_scene(scene)`, so native spacing and typography do not
+need to be expressed as terminal characters.
+
+```red
+import "andy" as andy;
+import "andy/color" as color;
+import "andy/native" as native;
+
+const screen = native.Window({"title": "Settings"});
+const scene = andy.NativeScene(640, 420)
+    .clear(color.rgb(0xf4, 0xf5, 0xf7))
+    .text(32, 30, "Settings", color.rgb(0x20, 0x22, 0x26), 24)
+    .input(32, 90, 576, 42, "Ada")
+    .button(440, 160, 168, 44, "Save");
+
+screen.run_scene(scene);
+```
 
 A second process rather than an extension because every window system
 insists its event loop runs on the process's main thread, and Red's
