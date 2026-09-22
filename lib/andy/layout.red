@@ -155,8 +155,12 @@ fun shrink(sizes, items, deficit) {
     let taken = 0;
     let ideal = 0;
     let issued = 0;
+    // Walked from the end, so that when there is not enough to go round
+    // the rounding falls on the last items rather than the first. A
+    // column too short for everything in it should lose what is at the
+    // bottom, which is the part the reader has not got to yet.
     for (let n in range(0, open.len())) {
-      const i = open[n];
+      const i = open[open.len() - 1 - n];
       const room = sizes[i] - items[i].minimum;
       ideal += take * room / available;
       let share = round(ideal) - issued;
