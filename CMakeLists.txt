@@ -108,6 +108,49 @@ red_add_extension(crc32_ext ffi/crc32_ext.cpp)
 # read that does not wait. POSIX only, like the rest of Red.
 red_add_extension(andy_ext ffi/andy_ext.cpp)
 
+# ---------------------------------------------------------------------
+# andy-gui: the window half of lib/andy.
+#
+# A program of its own rather than an extension, because a window system
+# wants its event loop on the process's main thread and Red's scheduler
+# moves a task between worker threads. tools/andy-gui/main.cpp explains
+# the arrangement; lib/andy/native.red is the other end of it.
+set(ANDY_GUI_SOURCES tools/andy-gui/main.cpp)
+set(ANDY_GUI_LIBRARIES "")
+set(ANDY_GUI_HOST "none")
+
+if(APPLE)
+  list(APPEND ANDY_GUI_SOURCES tools/andy-gui/host_darwin.mm)
+  list(APPEND ANDY_GUI_LIBRARIES "-framework Cocoa")
+  set(ANDY_GUI_HOST "cocoa")
+  # The Cocoa half is written for automatic reference counting. Without
+  # it every object here would have to be retained by hand, and the one
+  # that was forgotten would be a crash inside the window system rather
+  # than anywhere near the mistake.
+  set_source_files_properties(tools/andy-gui/host_darwin.mm PROPERTIES
+    COMPILE_OPTIONS "-fobjc-arc")
+else()
+  find_package(X11)
+  if(X11_FOUND)
+    list(APPEND ANDY_GUI_SOURCES tools/andy-gui/host_x11.cpp)
+    list(APPEND ANDY_GUI_LIBRARIES ${X11_LIBRARIES})
+    set(ANDY_GUI_HOST "x11")
+  else()
+    list(APPEND ANDY_GUI_SOURCES tools/andy-gui/host_none.cpp)
+    message(STATUS "No X11 found: andy-gui will report that it has no window system. The terminal backend is unaffected.")
+  endif()
+endif()
+
+add_executable(andy-gui ${ANDY_GUI_SOURCES})
+target_include_directories(andy-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tools/andy-gui)
+if(ANDY_GUI_LIBRARIES)
+  target_link_libraries(andy-gui PRIVATE ${ANDY_GUI_LIBRARIES})
+endif()
+if(NOT APPLE AND X11_FOUND)
+  target_include_directories(andy-gui PRIVATE ${X11_INCLUDE_DIR})
+endif()
+message(STATUS "andy-gui window system: ${ANDY_GUI_HOST}")
+
 enable_testing()
 
 # The runner is the interpreter itself, so `ctest` needs nothing beyond
