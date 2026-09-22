@@ -202,13 +202,25 @@ void Runtime::park() {
 }
 
 void Runtime::unpark() {
+  Thread* self = t_thread;
+  if (self == nullptr) return;
+  // Already running, so there is nothing to come back from and nothing
+  // to wait for: a collection cannot be under way, because one only
+  // starts once every thread has parked.
+  //
+  // Returning here rather than waiting is what makes park() and unpark()
+  // safe to nest. The scheduler unparks a fiber as it switches back in,
+  // and the native that parked it unparks it again on the way out; the
+  // second call used to wait for a collection that was waiting for this
+  // very thread to park, which is a deadlock that needed a collection to
+  // begin in exactly that window.
+  if (!self->parked.load(std::memory_order_acquire)) return;
+
   std::unique_lock<std::mutex> guard(worldMutex_);
   // A collection that is already under way has to finish first: it may
   // be looking at this thread's stack right now.
   while (gcPending.load(std::memory_order_relaxed)) worldCond_.wait(guard);
-  if (t_thread != nullptr) {
-    t_thread->parked.store(false, std::memory_order_release);
-  }
+  self->parked.store(false, std::memory_order_release);
 }
 
 void Runtime::lockParked(std::mutex& mutex) {
